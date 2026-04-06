@@ -15,7 +15,7 @@ from pathlib import Path
 CONFIG_PATH = Path("smaregi_config.json")
 DEFAULT_CONFIG = {
     "contract_id": "", "client_id": "", "client_secret": "",
-    "imgbb_api_key": "", "visible_fields": [], "use_sandbox": True,
+    "visible_fields": [], "use_sandbox": True,
 }
 
 # ============================================================
@@ -36,7 +36,7 @@ def safe_str(v, d=""):
     return str(v)
 
 # ============================================================
-# 設定管理 (🌟 Step2: Secrets対応化)
+# 設定管理 (Secrets完全対応)
 # ============================================================
 def _load_file_config():
     cfg = dict(DEFAULT_CONFIG)
@@ -51,9 +51,8 @@ def _load_file_config():
         if "CONTRACT_ID" in st.secrets: cfg["contract_id"] = st.secrets["CONTRACT_ID"]
         if "CLIENT_ID" in st.secrets: cfg["client_id"] = st.secrets["CLIENT_ID"]
         if "CLIENT_SECRET" in st.secrets: cfg["client_secret"] = st.secrets["CLIENT_SECRET"]
-        if "IMGBB_API_KEY" in st.secrets: cfg["imgbb_api_key"] = st.secrets["IMGBB_API_KEY"]
     except Exception:
-        pass # st.secretsが設定されていないローカル環境用
+        pass # st.secretsが設定されていない環境用
         
     return cfg
 
@@ -196,50 +195,46 @@ def get_token():
     return None
 
 # ============================================================
-# API: 画像
+# API: 画像連携 (🌟 imgBBを使わない安定・強力版)
 # ============================================================
-def img_upload(file_obj, api_key):
+def upload_and_link_image(token, product_id, file_obj):
     try:
         img = Image.open(file_obj)
-        if img.mode != "RGB": img = img.convert("RGB")
-        img.thumbnail((1200,1200), Image.LANCZOS)
-        buf = BytesIO(); img.save(buf, format="JPEG", quality=85)
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        r = requests.post("https://api.imgbb.com/1/upload", data={"key":api_key,"image":b64,"expiration":600})
-        if r.status_code == 200:
-            j = r.json()
-            if j.get("success"): return j["data"]["url"], None
-            return None, j.get("error",{}).get("message","不明")
-        return None, f"HTTP {r.status_code}"
-    except Exception as e: return None, str(e)
+        if img.mode != 'RGB': img = img.convert('RGB')
+        img.thumbnail((800, 800))
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='JPEG', quality=80)
+        img_bytes.seek(0)
+        
+        public_url = None
+        # 候補1: Catbox
+        try:
+            res = requests.post("https://catbox.moe/user/api.php", data={'reqtype': 'fileupload'}, files={'fileToUpload': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
+            if res.status_code == 200: public_url = res.text.strip()
+        except: pass
+        
+        # 候補2: file.io (Catbox失敗時)
+        if not public_url:
+            img_bytes.seek(0)
+            res = requests.post("https://file.io", files={'file': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
+            if res.status_code == 200: public_url = res.json().get("link")
+            
+        if not public_url: return False, "一時URLの発行にすべて失敗しました。"
 
-def img_register(token, pid, image_url):
-    url = f"{get_api_base()}/products/{pid}/image"
-    h = {"Authorization":f"Bearer {token}","Content-Type":"application/json"}
-    for a in range(5):
-        r = requests.put(url, headers=h, json={"imageUrl":image_url})
-        if r.status_code == 404 and a < 4: time.sleep(2); continue
-        break
-    return (True,"OK") if r.status_code == 200 else (False,f"HTTP {r.status_code}: {r.text}")
-
-def icon_register(token, pid, image_url):
-    url = f"{get_api_base()}/products/{pid}/icon_image"
-    h = {"Authorization":f"Bearer {token}","Content-Type":"application/json"}
-    for a in range(5):
-        r = requests.put(url, headers=h, json={"imageUrl":image_url})
-        if r.status_code == 404 and a < 4: time.sleep(2); continue
-        break
-    return (True,"OK") if r.status_code == 200 else (False,f"HTTP {r.status_code}: {r.text}")
-
-def img_link(token, pid, file_obj, api_key):
-    url, err = img_upload(file_obj, api_key)
-    if err: return False, f"imgBB失敗: {err}"
-    ok1,m1 = img_register(token, pid, url)
-    ok2,m2 = icon_register(token, pid, url)
-    if ok1 and ok2: return True, "画像・アイコン登録完了"
-    elif ok1: return True, f"画像OK / アイコン失敗: {m2}"
-    elif ok2: return False, f"画像失敗: {m1} / アイコンOK"
-    else: return False, f"画像失敗: {m1} / アイコン失敗: {m2}"
+        # スマレジへ imageUrl を送信 (商品画像)
+        url = f"{get_api_base()}/products/{product_id}/image"
+        h = {"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+        for a in range(5):
+            r = requests.put(url, headers=h, json={"imageUrl": public_url})
+            if r.status_code == 404 and a < 4: time.sleep(2); continue
+            break
+            
+        if r.status_code in [200, 201, 204]:
+            return True, "画像登録完了"
+        else:
+            return False, f"画像失敗 (HTTP {r.status_code}): {r.text}"
+    except Exception as e:
+        return False, f"システムエラー: {str(e)}"
 
 # ============================================================
 # API: 部門・商品
@@ -389,6 +384,7 @@ def add_form_dialog():
         elif d["type"] == "number": vals[k] = st.number_input(k, value=d["default"], step=1)
         else: vals[k] = st.text_input(k, value=d["default"], max_chars=d.get("max"))
     img_file = st.file_uploader("画像（任意）", type=["jpg","jpeg","png","gif"], key="form_img")
+    
     if st.button("登録", type="primary", use_container_width=True):
         payload = {}
         for k in visible:
@@ -401,6 +397,7 @@ def add_form_dialog():
             payload[d["api"]] = safe_str(v)
         if not payload.get("productName"): st.error("商品名は必須です"); return
         if not payload.get("categoryId"): st.error("部門IDは必須です"); return
+        
         with st.spinner("処理中..."):
             token = get_token()
             if not token: st.error("認証に失敗しました"); return
@@ -409,12 +406,10 @@ def add_form_dialog():
             if r.status_code in (200,201):
                 pid = r.json().get("productId","")
                 if img_file and pid:
-                    ak = get_config().get("imgbb_api_key","")
-                    if ak:
-                        img_file.seek(0); ok,msg = img_link(token,pid,img_file,ak)
-                        if ok: st.success(f"商品登録完了 (ID:{pid}) 画像・アイコンも登録")
-                        else: st.warning(f"商品登録OK (ID:{pid}) / {msg}")
-                    else: st.warning(f"商品登録OK (ID:{pid}) / imgBB APIキー未設定")
+                    img_file.seek(0)
+                    ok, msg = upload_and_link_image(token, pid, img_file)
+                    if ok: st.success(f"商品登録完了 (ID:{pid}) 画像も登録しました")
+                    else: st.warning(f"商品登録OK (ID:{pid}) / 画像連携失敗: {msg}")
                 else: st.success(f"商品登録完了 (ID:{pid})")
                 st.cache_data.clear(); time.sleep(1); st.rerun()
             else: st.error(f"登録失敗 (HTTP {r.status_code}): {r.text}")
@@ -467,21 +462,22 @@ def page_main():
                 with st.spinner("処理中..."):
                     token = get_token()
                     if not token: st.error("認証に失敗しました"); st.stop()
-                    ak = get_config().get("imgbb_api_key","")
                     for idx,row in edited_df.iterrows():
                         payload = row_to_post_payload(row)
                         if not payload: continue
                         if not payload.get("categoryId"):
                             results.append(("err",safe_str(row.get("商品名",f"行{idx+1}")),"部門IDは必須です")); continue
+                        
                         r = requests.post(f"{get_api_base()}/products",
                             headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                         name = safe_str(row.get("商品名",f"行{idx+1}"))
+                        
                         if r.status_code in (200,201):
                             pid = r.json().get("productId","")
                             img_name = safe_str(row.get("画像",""))
-                            if img_name and img_name in img_map and pid and ak:
+                            if img_name and img_name in img_map and pid:
                                 fo = img_map[img_name]; fo.seek(0)
-                                ok,msg = img_link(token,pid,fo,ak)
+                                ok, msg = upload_and_link_image(token, pid, fo)
                                 if ok: results.append(("ok",name,f"登録完了 画像あり (ID:{pid})"))
                                 else: results.append(("warn",name,f"商品OK / {msg}"))
                             else: results.append(("ok",name,f"登録完了 (ID:{pid})"))
@@ -540,7 +536,6 @@ def page_main():
                         with st.spinner("処理中..."):
                             token = get_token()
                             if not token: st.error("認証に失敗しました"); st.stop()
-                            ak = get_config().get("imgbb_api_key","")
                             for idx,nr in edited_prods.iterrows():
                                 pid = safe_str(nr.get("productId",""))
                                 pn = safe_str(nr.get("商品名",f"ID:{pid}"))
@@ -555,11 +550,11 @@ def page_main():
                                             headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},json=dp)
                                         if r.status_code not in (200,204):
                                             results.append(("err",pn,f"更新失敗 (HTTP {r.status_code}): {r.text}")); continue
-                                if pid in assigns and ak:
+                                if pid in assigns:
                                     fo = bmap[assigns[pid]]; fo.seek(0)
-                                    ok,msg = img_link(token,pid,fo,ak)
+                                    ok, msg = upload_and_link_image(token, pid, fo)
                                     if ok: results.append(("ok",pn,"更新＋画像登録完了"))
-                                    else: results.append(("warn",pn,f"更新OK / {msg}"))
+                                    else: results.append(("warn",pn,f"更新OK / 画像失敗: {msg}"))
                                 elif hc: results.append(("ok",pn,"更新完了"))
                             st.cache_data.clear()
                         if results:
@@ -567,7 +562,7 @@ def page_main():
                             for k,n,m in results: sr(k,n,m)
                 with cd:
                     if st.button("選択商品を削除",type="secondary",use_container_width=True,key="del_bulk"):
-                        st.warning("削除する商品IDを指定してください")
+                        st.warning("この機能は現在ロックされています")
             else:
                 popts = {f"{safe_str(p.get('productName',''))} (ID:{safe_str(p.get('productId',''))})": safe_str(p.get("productId","")) for p in prods}
                 sl = st.selectbox("対象商品",list(popts.keys()),key="indiv_sel")
@@ -575,15 +570,15 @@ def page_main():
                 ifile = st.file_uploader("画像をドラッグ＆ドロップ", type=["jpg","jpeg","png","gif"], key="indiv_img")
                 if ifile:
                     if st.button("この画像を登録",type="primary",key="indiv_reg"):
-                        ok_r = None
                         with st.spinner("処理中..."):
-                            token = get_token(); ak = get_config().get("imgbb_api_key","")
+                            token = get_token()
                             if not token: st.error("認証に失敗しました")
-                            elif not ak: st.error("imgBB APIキーが未設定です")
                             else:
-                                ifile.seek(0); ok_r,msg = img_link(token,spid,ifile,ak); st.cache_data.clear()
-                        if ok_r is True: st.success(msg)
-                        elif ok_r is False: st.error(msg)
+                                ifile.seek(0)
+                                ok, msg = upload_and_link_image(token, spid, ifile)
+                                st.cache_data.clear()
+                                if ok: st.success(msg)
+                                else: st.error(msg)
                 st.markdown("---")
                 if st.button("テーブル変更を保存",type="primary",use_container_width=True,key="save_indiv"):
                     results = []
@@ -678,8 +673,7 @@ def page_settings():
     st.markdown('<div class="main-header">設定</div>', unsafe_allow_html=True)
     cfg = get_config()
     for k,v in [("s_cid",cfg.get("contract_id","")),("s_cli",cfg.get("client_id","")),
-                ("s_sec",cfg.get("client_secret","")),("s_img",cfg.get("imgbb_api_key","")),
-                ("s_sb",cfg.get("use_sandbox",True))]:
+                ("s_sec",cfg.get("client_secret","")), ("s_sb",cfg.get("use_sandbox",True))]:
         if k not in st.session_state: st.session_state[k] = v
 
     st.markdown('<div class="info-card"><h4>スマレジ API 接続設定</h4>デベロッパーズのアプリ環境設定から取得した値を入力してください。</div>', unsafe_allow_html=True)
@@ -695,12 +689,6 @@ def page_settings():
     sec = st.text_input("クライアントシークレット" + (" (クラウド設定読込中)" if is_secret_sec else ""), value=st.session_state.s_sec, type="password", key="i_sec", disabled=is_secret_sec)
     
     st.markdown("---")
-    st.markdown('<div class="info-card"><h4>imgBB API キー</h4>商品画像アップロード用。<a href="https://api.imgbb.com/" target="_blank">imgBB</a> で取得。</div>', unsafe_allow_html=True)
-    
-    is_secret_img = "IMGBB_API_KEY" in st.secrets
-    imgk = st.text_input("imgBB APIキー" + (" (クラウド設定読込中)" if is_secret_img else ""), value=st.session_state.s_img, type="password", key="i_img", disabled=is_secret_img)
-    
-    st.markdown("---")
     st.markdown('<div class="info-card"><h4>デフォルト表示項目</h4></div>', unsafe_allow_html=True)
     optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
     cur_vis = cfg.get("visible_fields",[])
@@ -708,9 +696,9 @@ def page_settings():
     st.markdown("---")
     if st.button("設定を保存",type="primary",use_container_width=True):
         st.session_state.s_cid=cid; st.session_state.s_cli=cli; st.session_state.s_sec=sec
-        st.session_state.s_img=imgk; st.session_state.s_sb=use_sb
+        st.session_state.s_sb=use_sb
         update_config_bulk({"contract_id":cid,"client_id":cli,"client_secret":sec,
-            "imgbb_api_key":imgk,"use_sandbox":use_sb,"visible_fields":sel_vis})
+            "use_sandbox":use_sb,"visible_fields":sel_vis})
         for k in [k for k in st.session_state if k.startswith("_tc_")]: del st.session_state[k]
         st.cache_data.clear(); st.success("設定を保存しました")
     st.markdown("---")
