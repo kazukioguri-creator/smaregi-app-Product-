@@ -11,7 +11,7 @@ from io import BytesIO
 from PIL import Image
 from google.oauth2 import service_account
 from google.cloud import storage
-from streamlit_barcode_scanner import st_barcode_scanner
+from streamlit_qrcode_scanner import qrcode_scanner
 
 # ============================================================
 # 定数・ユーティリティ
@@ -300,7 +300,7 @@ def page_scanner_form():
 
     if st.session_state.input_mode == "scan":
         st.info("💡 カメラをバーコードに向けてください。自動で読み取ります。")
-        scanned = st_barcode_scanner(key="barcode_scanner")
+        scanned = qrcode_scanner(key="barcode_scanner")
         code_input = scanned if scanned else ""
         if code_input:
             st.success(f"✅ 読み取り成功: **{code_input}**")
