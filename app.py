@@ -11,7 +11,7 @@ from io import BytesIO
 from PIL import Image
 from google.oauth2 import service_account
 from google.cloud import storage
-from streamlit_qrcode_scanner import qrcode_scanner
+from pyzbar import pyzbar
 
 # ============================================================
 # 定数・ユーティリティ
@@ -299,11 +299,17 @@ def page_scanner_form():
     code_input = ""
 
     if st.session_state.input_mode == "scan":
-        st.info("💡 カメラをバーコードに向けてください。自動で読み取ります。")
-        scanned = qrcode_scanner(key="barcode_scanner")
-        code_input = scanned if scanned else ""
-        if code_input:
-            st.success(f"✅ 読み取り成功: **{code_input}**")
+        st.info("💡 バーコードをカメラで撮影してください。なるべくバーコードを画面いっぱいに映すと読み取りやすくなります。")
+        img_file = st.camera_input("バーコードを撮影", key="barcode_camera")
+        code_input = ""
+        if img_file:
+            img = Image.open(img_file)
+            decoded = pyzbar.decode(img)
+            if decoded:
+                code_input = decoded[0].data.decode("utf-8")
+                st.success(f"✅ 読み取り成功: **{code_input}**")
+            else:
+                st.warning("読み取れませんでした。バーコードを大きく映してもう一度撮影してください。")
 
     elif st.session_state.input_mode == "auto":
         code_input = st.session_state.final_code
