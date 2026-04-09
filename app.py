@@ -1,9 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 import time
 import base64
 import datetime
+import os
 import urllib.parse
 import pandas as pd
 from collections import OrderedDict
@@ -11,7 +13,6 @@ from io import BytesIO
 from PIL import Image
 from google.oauth2 import service_account
 from google.cloud import storage
-from pyzbar import pyzbar
 
 # ============================================================
 # 定数・ユーティリティ
@@ -70,6 +71,79 @@ def get_token():
     except Exception:
         pass
     return None
+
+# ============================================================
+# 🌟 特製バーコードリーダー コンポーネント (外カメ強制・高感度化)
+# ============================================================
+def custom_barcode_scanner(key="scanner"):
+    # プログラム内に一時的に専用のHTML/JSファイルを作り、高感度リーダーを起動します
+    component_dir = os.path.abspath("barcode_component_dir")
+    if not os.path.exists(component_dir):
+        os.makedirs(component_dir)
+        html_code = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://unpkg.com/html5-qrcode"></script>
+            <style>
+                body { margin: 0; padding: 0; background-color: #f8fafc; font-family: sans-serif; }
+                #reader { width: 100%; border-radius: 8px; border: 3px solid #3b82f6; overflow: hidden; background: #000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+            </style>
+        </head>
+        <body>
+            <div id="reader"></div>
+            <script>
+                function sendToStreamlit(value) {
+                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value }, "*");
+                }
+                function setHeight(h) {
+                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+                }
+                window.onload = function() {
+                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+                    setHeight(350);
+                };
+
+                let started = false;
+                window.addEventListener("message", function(event) {
+                    if (event.data.type === "streamlit:render" && !started) {
+                        started = true;
+                        const html5QrCode = new Html5Qrcode("reader");
+                        
+                        // 外カメ強制(environment) ＆ 商品バーコード専用設定
+                        const config = { 
+                            fps: 15, 
+                            qrbox: { width: 260, height: 100 }, // 1Dバーコードに合わせた横長枠
+                            formatsToSupport: [ 
+                                Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+                                Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+                                Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39
+                            ]
+                        };
+                        
+                        html5QrCode.start({ facingMode: "environment" }, config, 
+                            (decodedText) => {
+                                sendToStreamlit(decodedText);
+                                html5QrCode.stop().then(() => {
+                                    document.getElementById("reader").innerHTML = "<h3 style='color:#10b981; text-align:center; padding:20px; background:#fff;'>✅ 読取完了!</h3>";
+                                    setHeight(80);
+                                });
+                            },
+                            (errorMessage) => {}
+                        ).catch(err => {
+                            document.getElementById("reader").innerHTML = "<p style='color:red; text-align:center; padding:20px;'>カメラが起動できません。権限を確認してください。</p>";
+                        });
+                    }
+                });
+            </script>
+        </body>
+        </html>
+        """
+        with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
+            f.write(html_code)
+    
+    _scanner = components.declare_component("custom_barcode_scanner", path=component_dir)
+    return _scanner(key=key)
 
 # ============================================================
 # フィールド定義
@@ -299,21 +373,24 @@ def page_scanner_form():
     code_input = ""
 
     if st.session_state.input_mode == "scan":
-        st.info("💡 バーコードをカメラで撮影してください。なるべくバーコードを画面いっぱいに映すと読み取りやすくなります。")
-        img_file = st.camera_input("バーコードを撮影", key="barcode_camera")
-        code_input = ""
-        if img_file:
-            img = Image.open(img_file)
-            decoded = pyzbar.decode(img)
-            if decoded:
-                code_input = decoded[0].data.decode("utf-8")
-                st.success(f"✅ 読み取り成功: **{code_input}**")
-            else:
-                st.warning("読み取れませんでした。バーコードを大きく映してもう一度撮影してください。")
+        st.info("💡 商品のバーコードを枠内に収めてください（外カメが強制起動します）")
+        
+        # 🌟 ここで先ほどの自作高感度コンポーネントを呼び出します
+        scanned_result = custom_barcode_scanner(key="live_barcode_scanner")
+        
+        # 読み取りが成功すると、Python側の変数に自動で値が入ります
+        if scanned_result:
+            st.session_state.input_mode = "scanned_success"
+            st.session_state.final_code = scanned_result
+            st.rerun()
 
     elif st.session_state.input_mode == "auto":
         code_input = st.session_state.final_code
         st.success(f"✅ システムが自動で番号を割り当てました: **{code_input}**")
+        
+    elif st.session_state.input_mode == "scanned_success":
+        code_input = st.session_state.final_code
+        st.success(f"✅ 読み取り成功: **{code_input}**")
 
     # ---------------------------------------------------------
     # STEP 2 & 3: 情報入力と写真撮影
@@ -417,7 +494,7 @@ def page_scanner_form():
                 st.rerun()
 
 # ============================================================
-# ページ 2: 💻 商品一括管理
+# ページ 2: 💻 商品一括管理 (PC作業用スプレッドシート)
 # ============================================================
 def page_spreadsheet():
     inject_css()
