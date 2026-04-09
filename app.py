@@ -418,7 +418,7 @@ def get_token():
     return None
 
 # ============================================================
-# API: 画像登録 (🌟Google Cloud Storage 署名付きURL版)
+# API: 画像登録 (🌟Google Cloud Storage 署名付きURL ＋ 短縮回避版)
 # ============================================================
 def get_gcp_credentials():
     gcp_json_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
@@ -429,7 +429,7 @@ def get_gcp_credentials():
 def upload_and_link_image(token, product_id, file_obj):
     """
     Google Cloud Storage (GCS) に画像をアップロードし、
-    15分限定の署名付きURLを発行してスマレジに連携する最強・安全・確実なロジック。
+    15分限定の署名付きURLを発行。スマレジの511文字制限を回避するため短縮して連携する。
     """
     try:
         # 1. 画像の軽量化 (JPEG変換)
@@ -454,17 +454,29 @@ def upload_and_link_image(token, product_id, file_obj):
         # アップロード実行
         blob.upload_from_file(img_bytes, content_type="image/jpeg")
         
-        # 3. 15分間限定の「署名付きURL」を発行
+        # 3. 15分間限定の「署名付きURL」を発行 (とても長いURLが生成される)
         signed_url = blob.generate_signed_url(
             version="v4",
             expiration=datetime.timedelta(minutes=15),
             method="GET"
         )
         
-        # 4. スマレジへ imageUrl を送信 (PUT)
+        # 🌟 4. スマレジの511文字制限回避のため、TinyURLで短縮する
+        try:
+            # URLの中に特殊記号が含まれるため、安全な形式にエンコードしてから短縮APIに渡す
+            safe_url = requests.utils.quote(signed_url)
+            short_res = requests.get(f"https://tinyurl.com/api-create.php?url={safe_url}", timeout=5)
+            if short_res.status_code == 200:
+                final_url = short_res.text  # 例: https://tinyurl.com/xyz123 になる
+            else:
+                final_url = signed_url
+        except Exception:
+            final_url = signed_url
+
+        # 5. スマレジへ imageUrl を送信 (PUT)
         url = f"{get_api_base()}/products/{product_id}/image"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        payload = {"imageUrl": signed_url}
+        payload = {"imageUrl": final_url}
 
         last_r = None
         for attempt in range(4):
@@ -472,7 +484,7 @@ def upload_and_link_image(token, product_id, file_obj):
                 r = requests.put(url, headers=headers, json=payload, timeout=30)
                 last_r = r
                 if r.status_code in (200, 201, 204):
-                    return True, "画像登録完了（GCS経由）"
+                    return True, "画像登録完了（GCS + 短縮経由）"
                 if r.status_code == 404 and attempt < 3:
                     time.sleep(2 ** attempt) # 商品の非同期作成待ち
                     continue
