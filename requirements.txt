@@ -2,3 +2,4 @@ streamlit
 pandas
 requests
 Pillow
+google-cloud-storage
