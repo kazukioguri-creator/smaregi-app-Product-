@@ -134,7 +134,7 @@ def get_visible():
 def _cat_options():
     if "cat_options_cache" in st.session_state:
         return st.session_state["cat_options_cache"]
-    cats = get_categories()
+    cats = get_categories(st.session_state.get("access_token"))
     opts = [""] + [f"{safe_str(c.get('categoryId',''))}:{safe_str(c.get('categoryName',''))}" for c in cats]
     st.session_state["cat_options_cache"] = opts
     return opts
@@ -210,6 +210,7 @@ def upload_and_link_image(token, product_id, file_obj):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         payload = {"imageUrl": final_url}
         
+        # 1. 商品画像の登録
         url_img = f"{get_api_base()}/products/{product_id}/image"
         ok_img, msg_img = False, ""
         for attempt in range(4):
@@ -222,6 +223,7 @@ def upload_and_link_image(token, product_id, file_obj):
                 if attempt < 3: time.sleep(2 ** attempt); continue
                 msg_img = str(e); break
 
+        # 2. アイコン画像の登録
         url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
         ok_icon, msg_icon = False, ""
         for attempt in range(4):
@@ -238,6 +240,7 @@ def upload_and_link_image(token, product_id, file_obj):
         elif ok_img: return False, f"画像OK / アイコン失敗: {msg_icon}"
         elif ok_icon: return False, f"アイコンOK / 画像失敗: {msg_img}"
         else: return False, f"画像連携エラー (IMG:{msg_img} / ICON:{msg_icon})"
+        
     except Exception as e:
         return False, f"システムエラー: {str(e)}"
 
@@ -348,7 +351,8 @@ def page_login():
         auth_url = f"{base}/authorize?response_type=code&client_id={client_id}&scope={scope}&state={state}&redirect_uri={urllib.parse.quote(redirect_uri)}"
 
         st.write("##")
-        st.markdown(f'<a href="{auth_url}" target="_top" class="login-btn">スマレジでログインして開始</a>', unsafe_allow_html=True)
+        # 🌟 修正ポイント： target="_blank" を使い、別タブでスマレジ画面を開くようにしました！
+        st.markdown(f'<a href="{auth_url}" target="_blank" rel="noopener noreferrer" class="login-btn">スマレジでログインして開始（別タブで開きます）</a>', unsafe_allow_html=True)
     else:
         st.warning("契約IDを入力すると、ログインボタンが表示されます。")
 
