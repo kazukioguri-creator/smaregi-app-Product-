@@ -149,6 +149,7 @@ def inject_css():
     .r-ok   { background: #ecfdf5; color: #065f46; border-left: 4px solid #10b981; }
     .r-warn { background: #fffbeb; color: #b45309; border-left: 4px solid #f59e0b; }
     .r-err  { background: #fef2f2; color: #991b1b; border-left: 4px solid #ef4444; }
+    .indiv-panel { background: #f1f5f9; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border: 1px solid #cbd5e1; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -195,7 +196,6 @@ def upload_and_link_image(token, product_id, file_obj):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         payload = {"imageUrl": final_url}
         
-        # 1. 商品画像の登録
         url_img = f"{get_api_base()}/products/{product_id}/image"
         ok_img, msg_img = False, ""
         for attempt in range(4):
@@ -208,7 +208,6 @@ def upload_and_link_image(token, product_id, file_obj):
                 if attempt < 3: time.sleep(2 ** attempt); continue
                 msg_img = str(e); break
 
-        # 2. アイコン画像の登録
         url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
         ok_icon, msg_icon = False, ""
         for attempt in range(4):
@@ -264,6 +263,10 @@ def get_products(token):
 def prod_row(p, token, visible):
     row = {}
     cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
+    
+    row["🎯個別設定"] = False  # 行選択用のチェックボックス
+    row["productId"] = safe_str(p.get("productId",""))
+    
     for k in visible:
         d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
         if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
@@ -273,8 +276,8 @@ def prod_row(p, token, visible):
         elif d["type"] == "number": v = safe_float(v, d["default"])
         else: v = safe_str(v, d["default"])
         row[k] = v
-    row["productId"] = safe_str(p.get("productId",""))
-    row["画像セット"] = ""
+        
+    row["一括画像セット"] = ""
     return row
 
 def row_to_post_payload(row):
@@ -315,28 +318,36 @@ def page_main():
     inject_css()
     token = get_token()
     if not token:
-        st.error("スマレジとの認証に失敗しました。Streamlit CloudのSecrets設定（ID・シークレット）を確認してください。")
+        st.error("スマレジとの認証に失敗しました。Streamlit CloudのSecrets設定を確認してください。")
         st.stop()
 
-    # 🌟 画面左側のサイドバーで、いつでも表示項目をポチポチ切り替えられます！
+    # ---- サイドバー設定 ----
+    st.sidebar.markdown("### ⚙️ 商品コードの設定")
+    code_mode = st.sidebar.radio(
+        "新規登録時の商品コード",
+        ["手入力・バーコード", "自動採番 (システムにお任せ)"],
+        help="スマホやタブレットでバーコードを読む場合は『手入力』を選び、表の商品コードのマスを選択してからキーボードのカメラ読取機能を使ってください。"
+    )
+
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### 👁️ 表示項目の追加")
-    st.sidebar.caption("表に表示したい項目を選んでください。")
     optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
     cur_vis  = st.session_state.get("visible_fields", [])
-    sel_vis  = st.sidebar.multiselect("", options=optional, default=[c for c in cur_vis if c in optional], label_visibility="collapsed")
+    sel_vis  = st.sidebar.multiselect("表に追加する項目", options=optional, default=[c for c in cur_vis if c in optional], label_visibility="collapsed")
     if sel_vis != cur_vis:
         st.session_state["visible_fields"] = sel_vis
         st.rerun()
 
+    # ---- メイン画面 ----
     st.markdown('<div class="main-header">📦 商品マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    st.info("💡 **【使い方】** URLを開くだけで最新のデータが表示されます。表を直接編集して「保存する」ボタンを押せば、スマレジに即座に反映されます。")
+    st.info("💡 **【個別画像の設定方法】** 表の一番左にある **「🎯個別設定」** にチェックを入れると、その行専用の『カメラ起動・ファイル選択』パネルが下に出現します！")
 
     visible = get_visible()
     prods = get_products(token)
     
     original_rows = [prod_row(p, token, visible) for p in prods]
     original_df = pd.DataFrame(original_rows)
-    display_cols = ["productId"] + visible + ["画像セット"]
+    display_cols = ["🎯個別設定", "productId"] + visible + ["一括画像セット"]
     
     if original_df.empty: original_df = pd.DataFrame(columns=display_cols)
 
@@ -345,7 +356,7 @@ def page_main():
         st.write("##")
         btn_save = st.button("💾 表の変更をすべて保存する", type="primary", use_container_width=True)
     with c2:
-        st.caption("🖼️ 表で紐付けたい画像をドロップ")
+        st.caption("🖼️ 一括処理用の画像をドロップ")
         bulk_files = st.file_uploader("", type=["jpg","jpeg","png","gif"], accept_multiple_files=True, label_visibility="collapsed")
         bmap = {f.name: f for f in bulk_files} if bulk_files else {}
     with c3:
@@ -354,7 +365,10 @@ def page_main():
             st.cache_data.clear(); _refresh_cat_options(); st.rerun()
 
     cat_opts = _cat_options(token)
-    ccfg = {}
+    ccfg = {
+        "🎯個別設定": st.column_config.CheckboxColumn("🎯個別設定", default=False),
+        "productId": st.column_config.TextColumn("商品ID (空欄=新規)", disabled=True)
+    }
     for k in visible:
         d = FIELD_DEFS[k]
         if d["type"] == "category": ccfg[k] = st.column_config.SelectboxColumn(k, options=cat_opts)
@@ -362,12 +376,33 @@ def page_main():
         elif d["type"] == "number": ccfg[k] = st.column_config.NumberColumn(k)
         else: ccfg[k] = st.column_config.TextColumn(k, max_chars=d.get("max"))
     
-    ccfg["productId"] = st.column_config.TextColumn("商品ID (空欄=新規)", disabled=True)
-    if bmap: ccfg["画像セット"] = st.column_config.SelectboxColumn("画像セット", options=[""]+list(bmap.keys()), default="")
-    else: ccfg["画像セット"] = st.column_config.TextColumn("画像セット", default="", disabled=True)
+    if bmap: ccfg["一括画像セット"] = st.column_config.SelectboxColumn("一括画像セット", options=[""]+list(bmap.keys()), default="")
+    else: ccfg["一括画像セット"] = st.column_config.TextColumn("一括画像セット", default="", disabled=True)
 
-    edited_df = st.data_editor(original_df[display_cols], column_config=ccfg, num_rows="dynamic", use_container_width=True, height=600)
+    edited_df = st.data_editor(original_df[display_cols], column_config=ccfg, num_rows="dynamic", use_container_width=True, height=500)
 
+    # 🌟 個別設定パネルの表示処理
+    selected_rows = edited_df[edited_df["🎯個別設定"] == True]
+    custom_img_map = {} # 個別に撮影/アップロードされた画像を保持する辞書
+    
+    if not selected_rows.empty:
+        st.markdown("---")
+        st.markdown("### 📷 個別カメラ・メディア設定")
+        for idx, row in selected_rows.iterrows():
+            pn = str(row.get("商品名", f"新規行 {idx+1}")).strip()
+            if not pn or pn == "nan": pn = f"未入力の商品 (行 {idx+1})"
+            
+            st.markdown(f'<div class="indiv-panel"><strong>🎯 {pn}</strong> の画像設定</div>', unsafe_allow_html=True)
+            col_cam, col_file = st.columns(2)
+            
+            with col_cam:
+                cam_img = st.camera_input("カメラで撮影する", key=f"cam_{idx}")
+                if cam_img: custom_img_map[idx] = cam_img
+            with col_file:
+                up_img = st.file_uploader("スマホのフォルダから選ぶ", type=["jpg","jpeg","png"], key=f"up_{idx}")
+                if up_img: custom_img_map[idx] = up_img
+
+    # ---- 保存処理 ----
     if btn_save:
         results = []
         with st.spinner("データをスマレジに同期中..."):
@@ -377,22 +412,35 @@ def page_main():
                 pn = str(nr.get("商品名", "")).strip()
                 if not pn or pn in ["nan", "None", "<NA>"]: continue
                 
-                img_name = str(nr.get("画像セット", "")).strip()
-                has_img = img_name and img_name in bmap
+                # 画像の判定 (個別パネルの画像があれば優先、なければ一括画像)
+                target_img_obj = None
+                if idx in custom_img_map:
+                    target_img_obj = custom_img_map[idx]
+                else:
+                    bulk_img_name = str(nr.get("一括画像セット", "")).strip()
+                    if bulk_img_name and bulk_img_name in bmap:
+                        target_img_obj = bmap[bulk_img_name]
                 
                 if not pid:
+                    # 【新規登録】
                     payload = row_to_post_payload(nr)
                     if not payload.get("categoryId"): results.append(("err", pn, "部門未設定スキップ")); continue
+                    
+                    # 🌟 自動採番ロジック
+                    if code_mode == "自動採番 (システムにお任せ)" and not payload.get("productCode"):
+                        payload["productCode"] = f"AUTO-{int(time.time() * 1000)}"
+
                     r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                     if r.status_code in (200, 201):
                         new_pid = r.json().get("productId")
-                        if has_img:
-                            fo = bmap[img_name]; fo.seek(0)
-                            ok, msg = upload_and_link_image(token, new_pid, fo)
+                        if target_img_obj:
+                            target_img_obj.seek(0)
+                            ok, msg = upload_and_link_image(token, new_pid, target_img_obj)
                             results.append(("ok", pn, f"新規登録 & {msg}")) if ok else results.append(("warn", pn, f"登録OK / {msg}"))
                         else: results.append(("ok", pn, "新規登録完了"))
                     else: results.append(("err", pn, f"新規エラー: {r.text[:80]}"))
                 else:
+                    # 【更新】
                     orow = get_original_row(original_df, pid)
                     if orow:
                         dp = diff_payload(orow, nr)
@@ -400,12 +448,13 @@ def page_main():
                             r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
                             if r.status_code not in (200, 204): results.append(("err", pn, f"更新エラー: {r.text[:80]}")); continue
                         
-                        if has_img:
-                            fo = bmap[img_name]; fo.seek(0)
-                            ok, msg = upload_and_link_image(token, pid, fo)
+                        if target_img_obj:
+                            target_img_obj.seek(0)
+                            ok, msg = upload_and_link_image(token, pid, target_img_obj)
                             results.append(("ok", pn, f"更新 & {msg}")) if ok else results.append(("warn", pn, f"更新OK / {msg}"))
                         elif dp: results.append(("ok", pn, "データ更新完了"))
             st.cache_data.clear(); _refresh_cat_options()
+            
         if results:
             st.markdown("### 処理結果")
             for k, n, m in results: sr(k, n, m)
