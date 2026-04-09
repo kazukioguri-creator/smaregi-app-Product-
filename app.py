@@ -342,7 +342,9 @@ def page_scanner_form():
                     form_vals[k] = st.text_input(k, value=default_data[k])
 
         st.markdown("---")
-st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
+        
+        # 🌟 修正箇所：バグの元となっていたst.camera_inputを廃止し、スマホで確実に動くファイル選択ボタン1つに統合！
+        st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
         st.caption("👇 タップすると「カメラ」が確実に起動します")
         img_file = st.file_uploader("画像を撮影、または選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
         
