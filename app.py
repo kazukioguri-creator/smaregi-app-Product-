@@ -77,30 +77,20 @@ FIELD_DEFS = OrderedDict([
     ("商品名",        {"api":"productName",          "type":"text",    "default":"",         "required":True, "core":True, "max":85, "send_empty":True, "post":True}),
     ("商品コード",    {"api":"productCode",          "type":"text",    "default":"",         "required":False,"core":True, "max":20, "send_empty":False,"post":True}),
     ("商品価格",      {"api":"price",                "type":"number",  "default":0,          "required":True, "core":True, "max":None,"send_empty":True,"post":True}),
-    ("原価",          {"api":"cost",                 "type":"number",  "default":0,          "required":False,"core":False,"max":None,"send_empty":False,"post":True}),
     ("部門ID",        {"api":"categoryId",           "type":"category","default":"",         "required":True, "core":True, "max":None,"send_empty":False,"post":True}),
+    # --- ここから下は「詳細設定」に入る非コア項目 ---
+    ("原価",          {"api":"cost",                 "type":"number",  "default":0,          "required":False,"core":False,"max":None,"send_empty":False,"post":True}),
     ("税区分",        {"api":"taxDivision",          "type":"select",  "default":"0:税込",   "required":False,"core":False,"max":None,"send_empty":False,"post":True,
         "options":["0:税込","1:税抜","2:非課税"]}),
-    ("税率",          {"api":"taxRate",              "type":"number",  "default":10,         "required":False,"core":False,"max":None,"send_empty":False,"post":False}),
     ("在庫管理区分",  {"api":"stockControlDivision", "type":"select",  "default":"0:対象",   "required":False,"core":False,"max":None,"send_empty":False,"post":True,
         "options":["0:対象","1:対象外"]}),
-    ("表示順",        {"api":"displaySequence",      "type":"number",  "default":0,          "required":False,"core":False,"max":None,"send_empty":False,"post":True}),
+    ("売上区分",      {"api":"salesDivision",        "type":"select",  "default":"0:売上対象","required":False,"core":False,"max":None,"send_empty":False,"post":True,
+        "options":["0:売上対象","1:売上対象外"]}),
     ("説明",          {"api":"description",          "type":"text",    "default":"",         "required":False,"core":False,"max":1000,"send_empty":False,"post":True}),
     ("カラー",        {"api":"color",                "type":"text",    "default":"",         "required":False,"core":False,"max":85, "send_empty":False,"post":True}),
     ("サイズ",        {"api":"size",                 "type":"text",    "default":"",         "required":False,"core":False,"max":85, "send_empty":False,"post":True}),
-    ("売上区分",      {"api":"salesDivision",        "type":"select",  "default":"0:売上対象","required":False,"core":False,"max":None,"send_empty":False,"post":True,
-        "options":["0:売上対象","1:売上対象外"]}),
-    ("グループコード",{"api":"groupCode",            "type":"text",    "default":"",         "required":False,"core":False,"max":85, "send_empty":False,"post":True}),
-    ("商品カナ",      {"api":"productKana",          "type":"text",    "default":"",         "required":False,"core":False,"max":85, "send_empty":False,"post":True}),
     ("端末表示",      {"api":"displayFlag",          "type":"select",  "default":"1:表示する","required":False,"core":False,"max":None,"send_empty":False,"post":True,
         "options":["0:表示しない","1:表示する"]}),
-    ("会員価格",      {"api":"customerPrice",        "type":"number",  "default":0,          "required":False,"core":False,"max":None,"send_empty":False,"post":True}),
-    ("ポイント対象区分",{"api":"pointNotApplicable", "type":"select",  "default":"0:対象",   "required":False,"core":False,"max":None,"send_empty":False,"post":True,
-        "options":["0:対象","1:対象外"]}),
-    ("値引割引対象",  {"api":"calcDiscount",         "type":"select",  "default":"1:対象",   "required":False,"core":False,"max":None,"send_empty":False,"post":True,
-        "options":["0:対象外","1:対象"]}),
-    ("キャッチコピー",{"api":"catchCopy",            "type":"text",    "default":"",         "required":False,"core":False,"max":1000,"send_empty":False,"post":True}),
-    ("タグ",          {"api":"tag",                  "type":"text",    "default":"",         "required":False,"core":False,"max":85, "send_empty":False,"post":True}),
 ])
 
 def sel2api(v):
@@ -131,31 +121,47 @@ def _refresh_cat_options():
         del st.session_state["cat_options_cache"]
 
 # ============================================================
-# CSS
+# CSS (📱スマホ特化のUI/UX調整)
 # ============================================================
 def inject_css():
     st.markdown("""
     <style>
-    * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Meiryo, sans-serif; font-size: 13px; }
-    .stApp { background: #ffffff; }
-    .block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; max-width: 98% !important; }
-    section[data-testid="stSidebar"] { background: #f8f9fa !important; border-right: 1px solid #dee2e6; }
-    .main-header { color: #1e293b; font-size: 1.4rem; font-weight: 700; margin-bottom: 1rem; padding-bottom: .5rem; border-bottom: 2px solid #e2e8f0; }
-    .stButton > button[kind="primary"] { background: #10b981 !important; color: white !important; border: none !important; font-weight: 600 !important; border-radius: 4px !important; padding: .5rem 1rem !important; }
-    .stButton > button[kind="primary"]:hover { background: #059669 !important; }
-    [data-testid="stDataEditor"] { border: 1px solid #cbd5e1 !important; border-radius: 4px !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    [data-testid="stDataEditor"] input { ime-mode: active !important; }
-    .r-row { padding: .4rem .8rem; border-radius: 4px; margin: .2rem 0; font-size: .85rem; font-weight: 500; display: flex; align-items: center; gap: .5rem; }
-    .r-ok   { background: #ecfdf5; color: #065f46; border-left: 4px solid #10b981; }
-    .r-warn { background: #fffbeb; color: #b45309; border-left: 4px solid #f59e0b; }
-    .r-err  { background: #fef2f2; color: #991b1b; border-left: 4px solid #ef4444; }
-    .indiv-panel { background: #f1f5f9; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border: 1px solid #cbd5e1; }
+    /* iOS Safariでの入力ズーム防止のためにフォントサイズを16px以上に固定 */
+    * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Meiryo, sans-serif; }
+    input, select, textarea, .stSelectbox div { font-size: 16px !important; }
+    
+    .stApp { background: #f8fafc; }
+    .block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; max-width: 800px !important; }
+    section[data-testid="stSidebar"] { background: #ffffff !important; border-right: 1px solid #e2e8f0; }
+    
+    /* スマホで押しやすい巨大なボタン */
+    .stButton > button[kind="primary"] { 
+        background: #2563eb !important; color: white !important; border: none !important; 
+        font-weight: bold !important; border-radius: 8px !important; 
+        padding: 0.8rem 1rem !important; font-size: 1.1rem !important; 
+        width: 100%; box-shadow: 0 4px 6px rgba(37,99,235,0.2);
+    }
+    .stButton > button[kind="primary"]:hover { background: #1d4ed8 !important; }
+    .stButton > button[kind="secondary"] {
+        border-radius: 8px !important; padding: 0.6rem 1rem !important; font-weight: bold !important; width: 100%;
+    }
+    
+    /* フォームの見た目調整 */
+    .form-panel { background: #ffffff; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 1.5rem; border: 1px solid #e2e8f0;}
+    .main-header { color: #0f172a; font-size: 1.5rem; font-weight: 800; margin-bottom: 0.5rem; }
+    .sub-header { color: #64748b; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    
+    /* アラート・結果表示 */
+    .r-row { padding: .8rem 1rem; border-radius: 8px; margin: .5rem 0; font-size: 1rem; font-weight: bold; display: flex; align-items: center; gap: .5rem; }
+    .r-ok   { background: #dcfce7; color: #166534; border-left: 5px solid #22c55e; }
+    .r-warn { background: #fef9c3; color: #854d0e; border-left: 5px solid #eab308; }
+    .r-err  { background: #fee2e2; color: #991b1b; border-left: 5px solid #ef4444; }
     </style>
     """, unsafe_allow_html=True)
 
 def sr(kind, name, msg):
     cls  = {"ok":"r-ok","warn":"r-warn","err":"r-err"}.get(kind,"r-ok")
-    icon = {"ok":"✓","warn":"△","err":"✕"}.get(kind,"●")
+    icon = {"ok":"✅","warn":"⚠️","err":"❌"}.get(kind,"●")
     st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
@@ -185,48 +191,41 @@ def upload_and_link_image(token, product_id, file_obj):
         blob.upload_from_file(img_bytes, content_type="image/jpeg")
         
         signed_url = blob.generate_signed_url(version="v4", expiration=datetime.timedelta(minutes=15), method="GET")
-        
         try:
             safe_url = requests.utils.quote(signed_url)
             short_res = requests.get(f"https://tinyurl.com/api-create.php?url={safe_url}", timeout=5)
             final_url = short_res.text if short_res.status_code == 200 else signed_url
-        except:
-            final_url = signed_url
+        except: final_url = signed_url
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         payload = {"imageUrl": final_url}
         
         url_img = f"{get_api_base()}/products/{product_id}/image"
         ok_img, msg_img = False, ""
-        for attempt in range(4):
+        for attempt in range(3):
             try:
-                r1 = requests.put(url_img, headers=headers, json=payload, timeout=30)
+                r1 = requests.put(url_img, headers=headers, json=payload, timeout=15)
                 if r1.status_code in (200, 201, 204): ok_img = True; break
-                if r1.status_code == 404 and attempt < 3: time.sleep(2 ** attempt); continue
+                if r1.status_code == 404: time.sleep(1); continue
                 msg_img = r1.text[:50]; break
-            except Exception as e:
-                if attempt < 3: time.sleep(2 ** attempt); continue
-                msg_img = str(e); break
+            except Exception as e: time.sleep(1); msg_img = str(e); continue
 
         url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
         ok_icon, msg_icon = False, ""
-        for attempt in range(4):
+        for attempt in range(3):
             try:
-                r2 = requests.put(url_icon, headers=headers, json=payload, timeout=30)
+                r2 = requests.put(url_icon, headers=headers, json=payload, timeout=15)
                 if r2.status_code in (200, 201, 204): ok_icon = True; break
-                if r2.status_code == 404 and attempt < 3: time.sleep(2 ** attempt); continue
+                if r2.status_code == 404: time.sleep(1); continue
                 msg_icon = r2.text[:50]; break
-            except Exception as e:
-                if attempt < 3: time.sleep(2 ** attempt); continue
-                msg_icon = str(e); break
+            except Exception as e: time.sleep(1); msg_icon = str(e); continue
 
-        if ok_img and ok_icon: return True, "画像・アイコンの登録完了"
-        elif ok_img: return False, f"画像OK / アイコン失敗: {msg_icon}"
-        elif ok_icon: return False, f"アイコンOK / 画像失敗: {msg_img}"
-        else: return False, f"画像連携エラー (IMG:{msg_img} / ICON:{msg_icon})"
+        if ok_img and ok_icon: return True, "画像・アイコン登録完了"
+        elif ok_img: return False, f"画像OK/アイコン失敗"
+        elif ok_icon: return False, f"アイコンOK/画像失敗"
+        else: return False, f"画像連携エラー"
         
-    except Exception as e:
-        return False, f"システムエラー: {str(e)}"
+    except Exception as e: return False, f"システムエラー: {str(e)}"
 
 # ============================================================
 # API: データ取得系
@@ -244,7 +243,7 @@ def get_categories(token):
         p += 1
     return cats
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=60)
 def get_products(token):
     prods, p = [], 1
     while True:
@@ -257,226 +256,254 @@ def get_products(token):
         p += 1
     return prods
 
-# ============================================================
-# データ比較・ペイロード生成
-# ============================================================
-def prod_row(p, token, visible):
-    row = {}
-    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
-    
-    row["🎯個別設定"] = False  # 行選択用のチェックボックス
-    row["productId"] = safe_str(p.get("productId",""))
-    
-    for k in visible:
-        d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
-        if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
-        elif d["type"] == "category":
-            cid = safe_str(v); cn = cat_map.get(cid,"")
-            v = f"{cid}:{cn}" if cid and cn else cid
-        elif d["type"] == "number": v = safe_float(v, d["default"])
-        else: v = safe_str(v, d["default"])
-        row[k] = v
-        
-    row["一括画像セット"] = ""
-    return row
+def find_product_by_code(prods, code):
+    if not code: return None
+    for p in prods:
+        if p.get("productCode") == code: return p
+    return None
 
-def row_to_post_payload(row):
+# ============================================================
+# ペイロード生成
+# ============================================================
+def create_payload(form_data):
     payload = {}
-    for k,d in FIELD_DEFS.items():
-        if k not in row or not d.get("post",True): continue
-        v = row[k]
+    for k, d in FIELD_DEFS.items():
+        if k not in form_data: continue
+        v = form_data[k]
         if d["type"] == "select": v = sel2api(v)
         elif d["type"] == "category": v = safe_str(v).split(":")[0] if v and ":" in safe_str(v) else safe_str(v)
         if (v == "" or v is None or v == 0) and not d.get("send_empty",False): continue
         payload[d["api"]] = safe_str(v)
     return payload
 
-def diff_payload(old_row, new_row):
-    diff = {}
-    for k,d in FIELD_DEFS.items():
-        if k not in old_row or k not in new_row: continue
-        ov,nv = old_row[k], new_row[k]
-        if d["type"] == "select": ov,nv = sel2api(ov),sel2api(nv)
-        elif d["type"] == "category":
-            ov = safe_str(ov).split(":")[0] if ov and ":" in safe_str(ov) else safe_str(ov)
-            nv = safe_str(nv).split(":")[0] if nv and ":" in safe_str(nv) else safe_str(nv)
-        if safe_str(ov) != safe_str(nv):
-            if (nv == "" or nv is None or nv == 0) and not d.get("send_empty",False): continue
-            diff[d["api"]] = safe_str(nv)
-    return diff
-
-def get_original_row(original_df, pid):
-    if not pid: return None
-    res = original_df[original_df['productId'] == pid]
-    if not res.empty: return res.iloc[0].to_dict()
-    return None
-
 # ============================================================
-# ページ: 商品マスター
+# ページ 1: 📱 スキャン＆登録 (現場用専用フォーム)
 # ============================================================
-def page_main():
-    inject_css()
-    token = get_token()
-    if not token:
-        st.error("スマレジとの認証に失敗しました。Streamlit CloudのSecrets設定を確認してください。")
-        st.stop()
-
-    # ---- サイドバー設定 ----
-    st.sidebar.markdown("### ⚙️ 商品コードの設定")
-    code_mode = st.sidebar.radio(
-        "新規登録時の商品コード",
-        ["手入力・バーコード", "自動採番 (システムにお任せ)"],
-        help="スマホやタブレットでバーコードを読む場合は『手入力』を選び、表の商品コードのマスを選択してからキーボードのカメラ読取機能を使ってください。"
-    )
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 👁️ 表示項目の追加")
-    optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
-    cur_vis  = st.session_state.get("visible_fields", [])
-    sel_vis  = st.sidebar.multiselect("表に追加する項目", options=optional, default=[c for c in cur_vis if c in optional], label_visibility="collapsed")
-    if sel_vis != cur_vis:
-        st.session_state["visible_fields"] = sel_vis
-        st.rerun()
-
-    # ---- メイン画面 ----
-    st.markdown('<div class="main-header">📦 商品マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    st.info("💡 **【個別画像の設定方法】** 表の一番左にある **「🎯個別設定」** にチェックを入れると、その行専用の『カメラ起動・ファイル選択』パネルが下に出現します！")
-
-    visible = get_visible()
-    prods = get_products(token)
-    
-    original_rows = [prod_row(p, token, visible) for p in prods]
-    original_df = pd.DataFrame(original_rows)
-    display_cols = ["🎯個別設定", "productId"] + visible + ["一括画像セット"]
-    
-    if original_df.empty: original_df = pd.DataFrame(columns=display_cols)
-
-    c1, c2, c3 = st.columns([1.5, 1.5, 1])
-    with c1:
-        st.write("##")
-        btn_save = st.button("💾 表の変更をすべて保存する", type="primary", use_container_width=True)
-    with c2:
-        st.caption("🖼️ 一括処理用の画像をドロップ")
-        bulk_files = st.file_uploader("", type=["jpg","jpeg","png","gif"], accept_multiple_files=True, label_visibility="collapsed")
-        bmap = {f.name: f for f in bulk_files} if bulk_files else {}
-    with c3:
-        st.write("##")
-        if st.button("🔄 最新データに更新", use_container_width=True):
-            st.cache_data.clear(); _refresh_cat_options(); st.rerun()
-
-    cat_opts = _cat_options(token)
-    ccfg = {
-        "🎯個別設定": st.column_config.CheckboxColumn("🎯個別設定", default=False),
-        "productId": st.column_config.TextColumn("商品ID (空欄=新規)", disabled=True)
-    }
-    for k in visible:
-        d = FIELD_DEFS[k]
-        if d["type"] == "category": ccfg[k] = st.column_config.SelectboxColumn(k, options=cat_opts)
-        elif d["type"] == "select": ccfg[k] = st.column_config.SelectboxColumn(k, options=d.get("options",[]))
-        elif d["type"] == "number": ccfg[k] = st.column_config.NumberColumn(k)
-        else: ccfg[k] = st.column_config.TextColumn(k, max_chars=d.get("max"))
-    
-    if bmap: ccfg["一括画像セット"] = st.column_config.SelectboxColumn("一括画像セット", options=[""]+list(bmap.keys()), default="")
-    else: ccfg["一括画像セット"] = st.column_config.TextColumn("一括画像セット", default="", disabled=True)
-
-    edited_df = st.data_editor(original_df[display_cols], column_config=ccfg, num_rows="dynamic", use_container_width=True, height=500)
-
-    # 🌟 個別設定パネルの表示処理
-    selected_rows = edited_df[edited_df["🎯個別設定"] == True]
-    custom_img_map = {} # 個別に撮影/アップロードされた画像を保持する辞書
-    
-    if not selected_rows.empty:
-        st.markdown("---")
-        st.markdown("### 📷 個別カメラ・メディア設定")
-        for idx, row in selected_rows.iterrows():
-            pn = str(row.get("商品名", f"新規行 {idx+1}")).strip()
-            if not pn or pn == "nan": pn = f"未入力の商品 (行 {idx+1})"
-            
-            st.markdown(f'<div class="indiv-panel"><strong>🎯 {pn}</strong> の画像設定</div>', unsafe_allow_html=True)
-            col_cam, col_file = st.columns(2)
-            
-            with col_cam:
-                cam_img = st.camera_input("カメラで撮影する", key=f"cam_{idx}")
-                if cam_img: custom_img_map[idx] = cam_img
-            with col_file:
-                up_img = st.file_uploader("スマホのフォルダから選ぶ", type=["jpg","jpeg","png"], key=f"up_{idx}")
-                if up_img: custom_img_map[idx] = up_img
-
-    # ---- 保存処理 ----
-    if btn_save:
-        results = []
-        with st.spinner("データをスマレジに同期中..."):
-            for idx, nr in edited_df.iterrows():
-                pid = str(nr.get("productId", "")).strip()
-                if pid in ["nan", "None", "<NA>", ""]: pid = None
-                pn = str(nr.get("商品名", "")).strip()
-                if not pn or pn in ["nan", "None", "<NA>"]: continue
-                
-                # 画像の判定 (個別パネルの画像があれば優先、なければ一括画像)
-                target_img_obj = None
-                if idx in custom_img_map:
-                    target_img_obj = custom_img_map[idx]
-                else:
-                    bulk_img_name = str(nr.get("一括画像セット", "")).strip()
-                    if bulk_img_name and bulk_img_name in bmap:
-                        target_img_obj = bmap[bulk_img_name]
-                
-                if not pid:
-                    # 【新規登録】
-                    payload = row_to_post_payload(nr)
-                    if not payload.get("categoryId"): results.append(("err", pn, "部門未設定スキップ")); continue
-                    
-                    # 🌟 自動採番ロジック
-                    if code_mode == "自動採番 (システムにお任せ)" and not payload.get("productCode"):
-                        payload["productCode"] = f"AUTO-{int(time.time() * 1000)}"
-
-                    r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
-                    if r.status_code in (200, 201):
-                        new_pid = r.json().get("productId")
-                        if target_img_obj:
-                            target_img_obj.seek(0)
-                            ok, msg = upload_and_link_image(token, new_pid, target_img_obj)
-                            results.append(("ok", pn, f"新規登録 & {msg}")) if ok else results.append(("warn", pn, f"登録OK / {msg}"))
-                        else: results.append(("ok", pn, "新規登録完了"))
-                    else: results.append(("err", pn, f"新規エラー: {r.text[:80]}"))
-                else:
-                    # 【更新】
-                    orow = get_original_row(original_df, pid)
-                    if orow:
-                        dp = diff_payload(orow, nr)
-                        if dp:
-                            r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
-                            if r.status_code not in (200, 204): results.append(("err", pn, f"更新エラー: {r.text[:80]}")); continue
-                        
-                        if target_img_obj:
-                            target_img_obj.seek(0)
-                            ok, msg = upload_and_link_image(token, pid, target_img_obj)
-                            results.append(("ok", pn, f"更新 & {msg}")) if ok else results.append(("warn", pn, f"更新OK / {msg}"))
-                        elif dp: results.append(("ok", pn, "データ更新完了"))
-            st.cache_data.clear(); _refresh_cat_options()
-            
-        if results:
-            st.markdown("### 処理結果")
-            for k, n, m in results: sr(k, n, m)
-        else: st.success("変更されたデータはありませんでした。")
-
-# ============================================================
-# ページ: 部門マスター
-# ============================================================
-def page_categories():
+def page_scanner_form():
     inject_css()
     token = get_token()
     if not token:
         st.error("スマレジとの認証に失敗しました。")
         st.stop()
 
-    st.markdown('<div class="main-header">📁 部門マスター (Spreadsheet)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">📱 スキャン＆登録</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">スマホのカメラ機能を使ってバーコードを読み取り、商品を登録します。</div>', unsafe_allow_html=True)
+
+    prods = get_products(token)
+    cat_opts = _cat_options(token)
+
+    # 1. 商品コードの入力（スキャン）
+    st.markdown('<div class="form-panel">', unsafe_allow_html=True)
+    code_input = st.text_input("1️⃣ バーコードを読み取る", placeholder="ここをタップしてカメラ起動・スキャン", key="scan_code")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if code_input:
+        target_prod = find_product_by_code(prods, code_input)
+        is_new = target_prod is None
+        
+        if is_new:
+            st.success("✨ 新しいバーコードです。新商品を登録します。")
+            default_data = {k: d["default"] for k, d in FIELD_DEFS.items()}
+            default_data["商品コード"] = code_input
+        else:
+            st.info(f"🔄 既存の商品が見つかりました。「{target_prod.get('productName')}」を更新します。")
+            default_data = {}
+            for k, d in FIELD_DEFS.items():
+                val = target_prod.get(d["api"], d["default"])
+                if d["type"] == "number": val = safe_float(val, d["default"])
+                elif d["type"] == "select": val = api2sel(safe_str(val), d["options"])
+                elif d["type"] == "category":
+                    cid = safe_str(val)
+                    val = next((o for o in cat_opts if o.startswith(cid+":")), "") if cid else ""
+                default_data[k] = val
+        
+        st.markdown('<div class="form-panel">', unsafe_allow_html=True)
+        st.markdown("#### 2️⃣ 商品情報を入力")
+        
+        # コア項目の入力
+        form_vals = {}
+        form_vals["商品コード"] = code_input
+        form_vals["商品名"] = st.text_input("商品名 必須", value=default_data["商品名"])
+        form_vals["商品価格"] = st.number_input("価格 必須", value=int(default_data["商品価格"]), step=100)
+        
+        cat_index = cat_opts.index(default_data["部門ID"]) if default_data["部門ID"] in cat_opts else 0
+        form_vals["部門ID"] = st.selectbox("部門 必須", cat_opts, index=cat_index)
+
+        # 詳細設定（アコーディオン）
+        with st.expander("⚙️ 詳細設定を開く（原価、税設定など）"):
+            for k, d in FIELD_DEFS.items():
+                if d["core"] or k == "商品コード": continue
+                if d["type"] == "select":
+                    idx = d["options"].index(default_data[k]) if default_data[k] in d["options"] else 0
+                    form_vals[k] = st.selectbox(k, d["options"], index=idx)
+                elif d["type"] == "number":
+                    form_vals[k] = st.number_input(k, value=int(default_data[k]), step=1)
+                else:
+                    form_vals[k] = st.text_input(k, value=default_data[k])
+
+        st.markdown("---")
+        st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
+        img_method = st.radio("画像の設定方法", ["カメラで今すぐ撮る", "スマホのフォルダから選ぶ", "設定しない"], horizontal=True, label_visibility="collapsed")
+        
+        img_file = None
+        if img_method == "カメラで今すぐ撮る":
+            img_file = st.camera_input("商品の写真を撮影")
+        elif img_method == "スマホのフォルダから選ぶ":
+            img_file = st.file_uploader("画像ファイルを選択", type=["jpg","jpeg","png"])
+        
+        st.write("##")
+        submit_btn = st.button("🚀 この内容でスマレジに登録する", type="primary")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # 送信処理
+        if submit_btn:
+            if not form_vals["商品名"] or not form_vals["部門ID"]:
+                st.error("商品名と部門は必須です。")
+                st.stop()
+
+            payload = create_payload(form_vals)
+            
+            with st.spinner("スマレジに送信中..."):
+                if is_new:
+                    # 新規登録
+                    r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
+                    if r.status_code in (200, 201):
+                        pid = r.json().get("productId")
+                        if img_file:
+                            ok, msg = upload_and_link_image(token, pid, img_file)
+                            sr("ok", form_vals["商品名"], f"新規登録＆画像セット完了") if ok else sr("warn", form_vals["商品名"], f"登録OK / 画像エラー: {msg}")
+                        else:
+                            sr("ok", form_vals["商品名"], "新規登録完了")
+                        st.cache_data.clear()
+                    else:
+                        sr("err", "登録失敗", r.text[:100])
+                else:
+                    # 更新
+                    pid = target_prod.get("productId")
+                    r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
+                    if r.status_code in (200, 204):
+                        if img_file:
+                            ok, msg = upload_and_link_image(token, pid, img_file)
+                            sr("ok", form_vals["商品名"], f"更新＆画像セット完了") if ok else sr("warn", form_vals["商品名"], f"更新OK / 画像エラー: {msg}")
+                        else:
+                            sr("ok", form_vals["商品名"], "データ更新完了")
+                        st.cache_data.clear()
+                    else:
+                        sr("err", "更新失敗", r.text[:100])
+                
+                # 登録完了後、少し待ってから画面をリセット
+                time.sleep(2)
+                st.rerun()
+
+# ============================================================
+# ページ 2: 💻 商品一括管理 (PC作業用スプレッドシート)
+# ============================================================
+def page_spreadsheet():
+    inject_css()
+    token = get_token()
+    if not token: st.error("認証エラー"); st.stop()
+
+    st.markdown('<div class="main-header">💻 商品一括管理</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">PCでの価格の一括変更などに特化した画面です。（※新規作成やバーコード入力はスマホの「スキャン＆登録」をご利用ください）</div>', unsafe_allow_html=True)
+
+    # スプレッドシート用の表示項目設定
+    with st.expander("👁️ スプレッドシートの表示列を設定"):
+        optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
+        cur_vis  = st.session_state.get("visible_fields", [])
+        sel_vis  = st.multiselect("表に追加する項目", options=optional, default=[c for c in cur_vis if c in optional], label_visibility="collapsed")
+        if sel_vis != cur_vis:
+            st.session_state["visible_fields"] = sel_vis
+            st.rerun()
+
+    visible = get_visible()
+    prods = get_products(token)
+    
+    # スプレッドシート用データの構築
+    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
+    rows = []
+    for p in prods:
+        row = {"productId": safe_str(p.get("productId",""))}
+        for k in visible:
+            d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
+            if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
+            elif d["type"] == "category":
+                cid = safe_str(v); cn = cat_map.get(cid,"")
+                v = f"{cid}:{cn}" if cid and cn else cid
+            elif d["type"] == "number": v = safe_float(v, d["default"])
+            else: v = safe_str(v, d["default"])
+            row[k] = v
+        rows.append(row)
+        
+    df = pd.DataFrame(rows)
+    display_cols = ["productId"] + visible
+    if df.empty: df = pd.DataFrame(columns=display_cols)
+
+    c1, c2 = st.columns([2, 1])
+    with c1: btn_save = st.button("💾 表の変更をすべて保存する", type="primary")
+    with c2: 
+        if st.button("🔄 最新データに更新", type="secondary"): 
+            st.cache_data.clear(); st.rerun()
+
+    cat_opts = _cat_options(token)
+    ccfg = {
+        "productId": st.column_config.TextColumn("商品ID", disabled=True),
+        "商品コード": st.column_config.TextColumn("商品コード", disabled=True) # スプレッドシートからは変更不可にする
+    }
+    for k in visible:
+        if k == "商品コード": continue
+        d = FIELD_DEFS[k]
+        if d["type"] == "category": ccfg[k] = st.column_config.SelectboxColumn(k, options=cat_opts)
+        elif d["type"] == "select": ccfg[k] = st.column_config.SelectboxColumn(k, options=d.get("options",[]))
+        elif d["type"] == "number": ccfg[k] = st.column_config.NumberColumn(k)
+        else: ccfg[k] = st.column_config.TextColumn(k, max_chars=d.get("max"))
+
+    # 一括編集特化のため、num_rows="fixed" にして新規行追加を無効化
+    edited_df = st.data_editor(df[display_cols], column_config=ccfg, num_rows="fixed", use_container_width=True, height=600)
+
+    if btn_save:
+        results = []
+        with st.spinner("データを同期中..."):
+            for idx, nr in edited_df.iterrows():
+                pid = str(nr.get("productId", "")).strip()
+                if not pid: continue
+                
+                orow = df[df['productId'] == pid].iloc[0].to_dict()
+                dp = {}
+                for k,d in FIELD_DEFS.items():
+                    if k not in orow or k not in nr or k == "商品コード": continue
+                    ov, nv = orow[k], nr[k]
+                    if d["type"] == "select": ov,nv = sel2api(ov),sel2api(nv)
+                    elif d["type"] == "category":
+                        ov = safe_str(ov).split(":")[0] if ov and ":" in safe_str(ov) else safe_str(ov)
+                        nv = safe_str(nv).split(":")[0] if nv and ":" in safe_str(nv) else safe_str(nv)
+                    if safe_str(ov) != safe_str(nv):
+                        if (nv == "" or nv is None or nv == 0) and not d.get("send_empty",False): continue
+                        dp[d["api"]] = safe_str(nv)
+                
+                if dp:
+                    r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
+                    pn = str(nr.get("商品名", "不明"))
+                    if r.status_code in (200, 204): results.append(("ok", pn, "データ更新完了"))
+                    else: results.append(("err", pn, f"更新エラー: {r.text[:80]}"))
+            st.cache_data.clear()
+        if results:
+            for k, n, m in results: sr(k, n, m)
+        else: st.success("変更されたデータはありませんでした。")
+
+# ============================================================
+# ページ 3: 📁 部門マスター
+# ============================================================
+def page_categories():
+    inject_css()
+    token = get_token()
+    if not token: st.error("認証エラー"); st.stop()
+
+    st.markdown('<div class="main-header">📁 部門マスター</div>', unsafe_allow_html=True)
     cats = get_categories(token)
     cat_df = pd.DataFrame([{
         "部門ID": safe_str(c.get("categoryId","")), "部門名": safe_str(c.get("categoryName","")), "表示順": safe_int(c.get("displaySequence"), 0),
     } for c in cats]) if cats else pd.DataFrame(columns=["部門ID","部門名","表示順"])
 
-    st.write("##")
     btn_save_cat = st.button("💾 部門データの変更・追加を保存する", type="primary")
     edited_cats = st.data_editor(cat_df, use_container_width=True, num_rows="dynamic", height=500,
         column_config={"部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True), "部門名": st.column_config.TextColumn("部門名", required=True), "表示順": st.column_config.NumberColumn("表示順", default=0)})
@@ -513,7 +540,8 @@ def page_categories():
 # ナビゲーション
 # ============================================================
 nav = st.navigation([
-    st.Page(page_main,       title="商品マスター", icon="📦"),
-    st.Page(page_categories, title="部門マスター", icon="📁"),
+    st.Page(page_scanner_form, title="スキャン＆登録", icon="📱"),
+    st.Page(page_spreadsheet,  title="商品一括管理",   icon="💻"),
+    st.Page(page_categories,   title="部門マスター",   icon="📁"),
 ])
 nav.run()
