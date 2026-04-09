@@ -128,12 +128,6 @@ def get_visible():
     return core + [k for k in extra if k in FIELD_DEFS and not FIELD_DEFS[k]["core"]]
 
 def _cat_options():
-    """
-    カテゴリ選択肢を session_state にも保持する。
-    st.cache_data.clear() で @st.cache_data キャッシュが消えても、
-    data_editor の列設定が変わってウィジェットがリセットされるのを防ぐ。
-    """
-    # session_state に保持済みならそちらを優先（data_editor が安定する）
     if "cat_options_cache" in st.session_state:
         return st.session_state["cat_options_cache"]
     cats = get_categories()
@@ -142,7 +136,6 @@ def _cat_options():
     return opts
 
 def _refresh_cat_options():
-    """明示的にカテゴリ選択肢を再取得する（部門追加後などに呼ぶ）。"""
     if "cat_options_cache" in st.session_state:
         del st.session_state["cat_options_cache"]
 
@@ -160,9 +153,7 @@ def inject_css():
     }
 
     /* ---- App background ---- */
-    .stApp, [data-testid="stAppViewContainer"] {
-        background: #f0f2f5;
-    }
+    .stApp, [data-testid="stAppViewContainer"] { background: #f0f2f5; }
     .block-container {
         padding-top: 1.2rem !important;
         padding-bottom: 2rem !important;
@@ -389,50 +380,15 @@ def inject_css():
         font-size: .8rem !important;
     }
     [data-testid="stDataEditor"] input { ime-mode: active !important; }
-
-    /* ---- Form inputs ---- */
-    .stTextInput input, .stNumberInput input, .stSelectbox > div > div {
-        border: 1px solid #ced4da !important;
-        border-radius: 3px !important;
-        font-size: .82rem !important;
-        color: #212529 !important;
-        background: #fff !important;
-    }
-    .stTextInput input:focus, .stNumberInput input:focus {
-        border-color: #2563eb !important;
-        box-shadow: 0 0 0 2px rgba(37,99,235,.15) !important;
-    }
-
-    /* ---- Divider ---- */
-    hr { border: none; border-top: 1px solid #dde1e7 !important; margin: .9rem 0 !important; }
-
-    /* ---- Toggle ---- */
-    .stToggle > label { font-size: .82rem !important; }
-
-    /* ---- Markdown text ---- */
-    h4 { font-size: .85rem !important; font-weight: 700 !important; color: #1c2b45 !important; }
-
-    /* ---- Caption ---- */
-    .stCaption, [data-testid="stCaptionContainer"] * {
-        font-size: .72rem !important;
-        color: #6b7a8d !important;
-    }
-
-    /* ---- Warning / success / error ---- */
-    [data-testid="stAlert"] {
-        border-radius: 3px !important;
-        font-size: .82rem !important;
-    }
     </style>
     """, unsafe_allow_html=True)
-
 
 def sr(kind, name, msg):
     cls  = {"ok":"r-ok","err":"r-err","warn":"r-warn","skip":"r-skip","del":"r-del"}.get(kind,"r-ok")
     icon = {"ok":"✓","err":"✕","warn":"△","skip":"―","del":"✕"}.get(kind,"●")
     st.markdown(
         f'<div class="r-row {cls}"><span>{icon}</span>'
-        f'<strong>{name}</strong><span style="opacity:.6">|</span>{msg}</div>',
+        f'<strong>{name}</strong><span style="opacity:.6; margin: 0 4px;">|</span>{msg}</div>',
         unsafe_allow_html=True
     )
 
@@ -459,56 +415,69 @@ def get_token():
     return None
 
 # ============================================================
-# API: 画像登録 — スマレジAPIへ直接マルチパートアップロード
+# API: 画像登録 (🌟外部URLを経由するPUT通信へ修正)
 # ============================================================
 def upload_and_link_image(token, product_id, file_obj):
     """
-    スマレジ POS API の商品画像エンドポイントへ Base64 JSON で送信する。
-    スマレジ API は multipart/form-data を受け付けず JSON のみ受け付けるため。
+    スマレジAPIは「外部公開された画像URL」を「PUT」で送信する仕様です。
+    画像を一時的にURL化し、スマレジに紐付けます。
     """
     try:
-        # リサイズ & JPEG 変換
+        # リサイズ & JPEG 変換 (軽量化)
         img = Image.open(file_obj)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        img.thumbnail((1024, 1024), Image.LANCZOS)
+        img.thumbnail((800, 800), Image.LANCZOS)
         img_bytes = BytesIO()
         img.save(img_bytes, format="JPEG", quality=85)
-        img_b64 = base64.b64encode(img_bytes.getvalue()).decode("utf-8")
+        img_bytes.seek(0)
+        
+        public_url = None
+        
+        # 1. CatboxでURL化を試行
+        try:
+            res = requests.post("https://catbox.moe/user/api.php", data={'reqtype': 'fileupload'}, files={'fileToUpload': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
+            if res.status_code == 200: public_url = res.text.strip()
+        except: pass
+        
+        # 2. 失敗時は file.io でフォールバック
+        if not public_url:
+            img_bytes.seek(0)
+            try:
+                res = requests.post("https://file.io", files={'file': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
+                if res.status_code == 200: public_url = res.json().get("link")
+            except: pass
+            
+        if not public_url: return False, "画像の一時URL化に失敗しました（サーバー混雑）"
 
-        url     = f"{get_api_base()}/products/{product_id}/image"
+        # 3. スマレジへ imageUrl を送信 (PUT)
+        url = f"{get_api_base()}/products/{product_id}/image"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        # スマレジ API は "imageData" フィールドに純粋な base64 文字列を期待する
-        payload = {"imageData": img_b64}
+        payload = {"imageUrl": public_url}
 
         last_r = None
         for attempt in range(4):
             try:
-                r = requests.post(url, headers=headers, json=payload, timeout=30)
-            except requests.exceptions.RequestException as e:
+                r = requests.put(url, headers=headers, json=payload, timeout=30)
+                last_r = r
+                if r.status_code in (200, 201, 204):
+                    return True, "画像登録完了"
+                if r.status_code == 404 and attempt < 3:
+                    time.sleep(2 ** attempt) # 商品の非同期作成待ち
+                    continue
+                break
+            except requests.exceptions.RequestException:
                 if attempt < 3:
                     time.sleep(2 ** attempt)
                     continue
-                return False, f"通信エラー: {e}"
-
-            last_r = r
-
-            if r.status_code in (200, 201, 204):
-                return True, "画像登録完了"
-
-            # 商品の非同期生成待ち
-            if r.status_code == 404 and attempt < 3:
-                time.sleep(2 ** attempt)
-                continue
-
-            break
+                break
 
         if last_r is not None:
-            return False, f"画像登録失敗 (HTTP {last_r.status_code}): {last_r.text[:300]}"
-        return False, "画像登録失敗 (レスポンスなし)"
+            return False, f"画像連携失敗 (HTTP {last_r.status_code}): {last_r.text[:100]}"
+        return False, "画像連携に失敗しました（タイムアウト）"
 
     except Exception as e:
-        return False, f"システムエラー: {e}"
+        return False, f"画像処理エラー: {e}"
 
 # ============================================================
 # API: 部門・商品
@@ -791,7 +760,7 @@ def page_main():
                                 results.append(("ok", name, f"登録完了 (ID:{pid})"))
                         else:
                             results.append(("err", name, f"登録失敗 (HTTP {r.status_code}): {r.text[:120]}"))
-                    # 商品キャッシュのみクリア（カテゴリは維持 → data_editor がリセットされない）
+                    # 商品キャッシュのみクリア
                     get_products.clear()
                 if results:
                     ok_cnt  = sum(1 for k,_,_ in results if k=="ok")
@@ -1047,7 +1016,6 @@ def page_settings():
         update_config_bulk({"contract_id":cid,"client_id":cli,"client_secret":sec,
             "use_sandbox":use_sb,"visible_fields":sel_vis})
         for k in [k for k in st.session_state if k.startswith("_tc_")]: del st.session_state[k]
-        # 設定変更時は全キャッシュリセット（接続先が変わる可能性があるため）
         st.cache_data.clear()
         _refresh_cat_options()
         st.success("設定を保存しました。")
