@@ -4,6 +4,7 @@ import json
 import time
 import base64
 import datetime
+import urllib.parse
 import pandas as pd
 from collections import OrderedDict
 from io import BytesIO
@@ -28,43 +29,59 @@ def safe_str(v, d=""):
     if pd.isna(v) or v is None: return d
     return str(v)
 
-# ============================================================
-# 設定管理 (🌟マルチユーザー共有対応)
-# ============================================================
-# JSONファイルへの保存を廃止し、ブラウザのセッション（メモリ上）のみで管理します。
-# これにより、複数人が同時にアクセスしてもお互いのデータが混ざりません。
-def get_config():
-    if "app_config" not in st.session_state:
-        st.session_state.app_config = {
-            "contract_id": "", "client_id": "", "client_secret": "",
-            "visible_fields": [], "use_sandbox": True,
-        }
-        # 初期値としてSecretsに値があれば読み込む（オーナー様用）
-        try:
-            if "CONTRACT_ID" in st.secrets: st.session_state.app_config["contract_id"] = st.secrets["CONTRACT_ID"]
-            if "CLIENT_ID" in st.secrets: st.session_state.app_config["client_id"] = st.secrets["CLIENT_ID"]
-            if "CLIENT_SECRET" in st.secrets: st.session_state.app_config["client_secret"] = st.secrets["CLIENT_SECRET"]
-        except Exception:
-            pass
-    return st.session_state.app_config
-
-def update_config_bulk(u):
-    cfg = get_config()
-    cfg.update(u)
-    st.session_state.app_config = cfg
-
-def update_config(k, v): 
-    update_config_bulk({k: v})
-
 def get_api_base():
-    cfg = get_config(); cid = cfg.get("contract_id", "")
-    dom = "smaregi.dev" if cfg.get("use_sandbox", True) else "smaregi.jp"
+    cid = st.session_state.get("contract_id", "")
+    dom = "smaregi.dev" if st.session_state.get("use_sandbox", True) else "smaregi.jp"
     return f"https://api.{dom}/{cid}/pos"
 
-def get_auth_url():
-    cfg = get_config(); cid = cfg.get("contract_id", "")
-    dom = "smaregi.dev" if cfg.get("use_sandbox", True) else "smaregi.jp"
-    return f"https://id.{dom}/app/{cid}/token"
+# ============================================================
+# OAuth ログインコールバック処理 (最優先で実行)
+# ============================================================
+# スマレジのログイン画面から戻ってきた時にURLにくっついている暗号(code)をキャッチして鍵に交換します。
+if "code" in st.query_params and "state" in st.query_params:
+    code = st.query_params["code"]
+    state = st.query_params["state"]
+    
+    try:
+        # state に仕込んでおいた 契約ID と 環境情報 を取り出す
+        contract_id, env = state.split("::")
+        is_sandbox = (env == "dev")
+        
+        client_id = st.secrets["CLIENT_ID"]
+        client_secret = st.secrets["CLIENT_SECRET"]
+        redirect_uri = st.secrets["REDIRECT_URI"]
+        
+        token_url = f"https://id.smaregi.{env}/app/{contract_id}/token"
+        cred = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        
+        headers = {
+            "Authorization": f"Basic {cred}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri
+        }
+        
+        # 鍵(アクセストークン)の交換リクエスト
+        res = requests.post(token_url, headers=headers, data=payload)
+        if res.status_code == 200:
+            data = res.json()
+            st.session_state["access_token"] = data["access_token"]
+            st.session_state["contract_id"] = contract_id
+            st.session_state["use_sandbox"] = is_sandbox
+            st.session_state["visible_fields"] = [] # 初期設定
+            st.success("ログインに成功しました！")
+        else:
+            st.error(f"認証エラー: {res.text}")
+    except Exception as e:
+        st.error(f"ログイン処理エラー: {e}")
+        
+    # URLの暗号を消して画面をスッキリさせる
+    st.query_params.clear()
+    time.sleep(1)
+    st.rerun()
 
 # ============================================================
 # フィールド定義
@@ -110,7 +127,7 @@ def api2sel(val, opts):
     return opts[0] if opts else s
 
 def get_visible():
-    cfg = get_config(); extra = cfg.get("visible_fields", [])
+    extra = st.session_state.get("visible_fields", [])
     core = [k for k, d in FIELD_DEFS.items() if d["core"]]
     return core + [k for k in extra if k in FIELD_DEFS and not FIELD_DEFS[k]["core"]]
 
@@ -127,7 +144,7 @@ def _refresh_cat_options():
         del st.session_state["cat_options_cache"]
 
 # ============================================================
-# CSS — 超シンプル Spreadsheet スタイル
+# CSS
 # ============================================================
 def inject_css():
     st.markdown("""
@@ -145,6 +162,8 @@ def inject_css():
     .r-ok   { background: #ecfdf5; color: #065f46; border-left: 4px solid #10b981; }
     .r-warn { background: #fffbeb; color: #b45309; border-left: 4px solid #f59e0b; }
     .r-err  { background: #fef2f2; color: #991b1b; border-left: 4px solid #ef4444; }
+    .login-btn { display:inline-block; background:#2563eb; color:white !important; padding:12px 24px; text-decoration:none; border-radius:6px; font-weight:bold; font-size: 1rem; text-align:center; transition: all 0.2s;}
+    .login-btn:hover { background:#1d4ed8; box-shadow: 0 4px 6px rgba(37,99,235,0.3); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -154,33 +173,13 @@ def sr(kind, name, msg):
     st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
-# API: 認証 & GCS画像登録
+# API: GCS画像登録 (画像・アイコン)
 # ============================================================
-def get_token():
-    cfg = get_config()
-    cid, ci, cs = cfg.get("contract_id",""), cfg.get("client_id",""), cfg.get("client_secret","")
-    if not cid or not ci or not cs: return None
-    ck = f"_tc_{cid}"
-    cached = st.session_state.get(ck)
-    if cached and cached.get("ea",0) > time.time(): return cached["at"]
-    try:
-        cred = base64.b64encode(f"{ci}:{cs}".encode()).decode()
-        r = requests.post(get_auth_url(),
-            headers={"Authorization":f"Basic {cred}","Content-Type":"application/x-www-form-urlencoded"},
-            data={"grant_type":"client_credentials","scope":"pos.products:read pos.products:write"})
-        if r.status_code == 200:
-            d = r.json(); t = d.get("access_token")
-            st.session_state[ck] = {"at":t,"ea":time.time()+d.get("expires_in",3600)-60}
-            return t
-    except: pass
-    return None
-
 def get_gcp_credentials():
     gcp_json_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
     gcp_dict = json.loads(gcp_json_str)
     return service_account.Credentials.from_service_account_info(gcp_dict)
 
-# 🌟 画像＆アイコン 同時セットロジック
 def upload_and_link_image(token, product_id, file_obj):
     try:
         img = Image.open(file_obj)
@@ -211,7 +210,6 @@ def upload_and_link_image(token, product_id, file_obj):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         payload = {"imageUrl": final_url}
         
-        # 1. 商品画像の登録
         url_img = f"{get_api_base()}/products/{product_id}/image"
         ok_img, msg_img = False, ""
         for attempt in range(4):
@@ -224,7 +222,6 @@ def upload_and_link_image(token, product_id, file_obj):
                 if attempt < 3: time.sleep(2 ** attempt); continue
                 msg_img = str(e); break
 
-        # 2. アイコン画像の登録
         url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
         ok_icon, msg_icon = False, ""
         for attempt in range(4):
@@ -237,22 +234,18 @@ def upload_and_link_image(token, product_id, file_obj):
                 if attempt < 3: time.sleep(2 ** attempt); continue
                 msg_icon = str(e); break
 
-        # 結果の判定
         if ok_img and ok_icon: return True, "画像・アイコンの登録完了"
         elif ok_img: return False, f"画像OK / アイコン失敗: {msg_icon}"
         elif ok_icon: return False, f"アイコンOK / 画像失敗: {msg_img}"
         else: return False, f"画像連携エラー (IMG:{msg_img} / ICON:{msg_icon})"
-        
     except Exception as e:
         return False, f"システムエラー: {str(e)}"
 
 # ============================================================
-# API: 部門・商品データ取得
+# API: データ取得系
 # ============================================================
 @st.cache_data(ttl=120)
-def get_categories():
-    token = get_token()
-    if not token: return []
+def get_categories(token):
     cats, p = [], 1
     while True:
         r = requests.get(f"{get_api_base()}/categories", headers={"Authorization":f"Bearer {token}"}, params={"limit":1000,"page":p})
@@ -265,9 +258,7 @@ def get_categories():
     return cats
 
 @st.cache_data(ttl=120)
-def get_products():
-    token = get_token()
-    if not token: return []
+def get_products(token):
     prods, p = [], 1
     while True:
         r = requests.get(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}"}, params={"limit":1000,"page":p})
@@ -284,7 +275,7 @@ def get_products():
 # ============================================================
 def prod_row(p, visible):
     row = {}
-    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories()}
+    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(st.session_state["access_token"])}
     for k in visible:
         d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
         if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
@@ -295,7 +286,7 @@ def prod_row(p, visible):
         else: v = safe_str(v, d["default"])
         row[k] = v
     row["productId"] = safe_str(p.get("productId",""))
-    row["画像セット"] = "" # 画像列は空で初期化
+    row["画像セット"] = ""
     return row
 
 def row_to_post_payload(row):
@@ -330,19 +321,50 @@ def get_original_row(original_df, pid):
     return None
 
 # ============================================================
-# ページ 1: 商品マスター (統合Excel UI)
+# ページ: ログイン
+# ============================================================
+def page_login():
+    inject_css()
+    st.markdown('<div class="main-header">🔐 スマレジ ログイン</div>', unsafe_allow_html=True)
+    
+    if "access_token" in st.session_state:
+        st.success(f"✅ ログイン済みです (契約ID: {st.session_state.get('contract_id')})")
+        if st.button("ログアウト", type="secondary"):
+            st.session_state.clear()
+            st.rerun()
+        return
+
+    st.info("このアプリを利用するには、スマレジのアカウントでログインしてください。")
+    use_sb = st.toggle("サンドボックス環境（テスト用）でログインする", value=True)
+    cid_input = st.text_input("ご利用の 契約ID を入力してください", placeholder="例: sb_yourid123")
+
+    if cid_input:
+        client_id = st.secrets["CLIENT_ID"]
+        redirect_uri = st.secrets["REDIRECT_URI"]
+        
+        base = "https://id.smaregi.dev" if use_sb else "https://id.smaregi.jp"
+        state = f"{cid_input}::{'dev' if use_sb else 'jp'}"
+        scope = urllib.parse.quote("pos.products:read pos.products:write")
+        auth_url = f"{base}/authorize?response_type=code&client_id={client_id}&scope={scope}&state={state}&redirect_uri={urllib.parse.quote(redirect_uri)}"
+
+        st.write("##")
+        st.markdown(f'<a href="{auth_url}" target="_self" class="login-btn">スマレジでログインして開始</a>', unsafe_allow_html=True)
+    else:
+        st.warning("契約IDを入力すると、ログインボタンが表示されます。")
+
+# ============================================================
+# ページ: 商品マスター
 # ============================================================
 def page_main():
-    inject_css()
-    cfg = get_config()
-    if not cfg.get("contract_id") or not cfg.get("client_id") or not cfg.get("client_secret"):
-        st.warning("左のメニューから「設定」を開き、API接続情報を入力してください。")
+    if "access_token" not in st.session_state:
+        st.warning("左のメニューから「ログイン」を行ってください。")
         st.stop()
 
+    inject_css()
     st.markdown('<div class="main-header">📦 商品マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    
+    token = st.session_state["access_token"]
     visible = get_visible()
-    prods = get_products()
+    prods = get_products(token)
     
     original_rows = [prod_row(p, visible) for p in prods]
     original_df = pd.DataFrame(original_rows)
@@ -381,13 +403,9 @@ def page_main():
     if btn_save:
         results = []
         with st.spinner("データをスマレジに同期中..."):
-            token = get_token()
-            if not token: st.error("認証エラー"); st.stop()
-            
             for idx, nr in edited_df.iterrows():
                 pid = str(nr.get("productId", "")).strip()
                 if pid in ["nan", "None", "<NA>", ""]: pid = None
-                
                 pn = str(nr.get("商品名", "")).strip()
                 if not pn or pn in ["nan", "None", "<NA>"]: continue
                 
@@ -395,7 +413,6 @@ def page_main():
                 has_img = img_name and img_name in bmap
                 
                 if not pid:
-                    # 新規
                     payload = row_to_post_payload(nr)
                     if not payload.get("categoryId"): results.append(("err", pn, "部門未設定スキップ")); continue
                     r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
@@ -408,7 +425,6 @@ def page_main():
                         else: results.append(("ok", pn, "新規登録完了"))
                     else: results.append(("err", pn, f"新規エラー: {r.text[:80]}"))
                 else:
-                    # 更新
                     orow = get_original_row(original_df, pid)
                     if orow:
                         dp = diff_payload(orow, nr)
@@ -421,41 +437,36 @@ def page_main():
                             ok, msg = upload_and_link_image(token, pid, fo)
                             results.append(("ok", pn, f"更新 & {msg}")) if ok else results.append(("warn", pn, f"更新OK / {msg}"))
                         elif dp: results.append(("ok", pn, "データ更新完了"))
-
             st.cache_data.clear(); _refresh_cat_options()
-        
         if results:
             st.markdown("### 処理結果")
             for k, n, m in results: sr(k, n, m)
         else: st.success("変更されたデータはありませんでした。")
 
 # ============================================================
-# ページ 2: 部門マスター
+# ページ: 部門マスター
 # ============================================================
 def page_categories():
+    if "access_token" not in st.session_state:
+        st.warning("左のメニューから「ログイン」を行ってください。")
+        st.stop()
+
     inject_css()
     st.markdown('<div class="main-header">📁 部門マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    
-    cats = get_categories()
+    token = st.session_state["access_token"]
+    cats = get_categories(token)
     cat_df = pd.DataFrame([{
-        "部門ID": safe_str(c.get("categoryId","")),
-        "部門名": safe_str(c.get("categoryName","")),
-        "表示順": safe_int(c.get("displaySequence"), 0),
+        "部門ID": safe_str(c.get("categoryId","")), "部門名": safe_str(c.get("categoryName","")), "表示順": safe_int(c.get("displaySequence"), 0),
     } for c in cats]) if cats else pd.DataFrame(columns=["部門ID","部門名","表示順"])
 
     st.write("##")
     btn_save_cat = st.button("💾 部門データの変更・追加を保存する", type="primary")
-    
-    edited_cats = st.data_editor(
-        cat_df, use_container_width=True, num_rows="dynamic", height=500,
-        column_config={"部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True), "部門名": st.column_config.TextColumn("部門名", required=True), "表示順": st.column_config.NumberColumn("表示順", default=0)}
-    )
+    edited_cats = st.data_editor(cat_df, use_container_width=True, num_rows="dynamic", height=500,
+        column_config={"部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True), "部門名": st.column_config.TextColumn("部門名", required=True), "表示順": st.column_config.NumberColumn("表示順", default=0)})
 
     if btn_save_cat:
         results = []
         with st.spinner("部門データを同期中..."):
-            token = get_token()
-            if not token: st.error("認証エラー"); st.stop()
             for idx, row in edited_cats.iterrows():
                 cid = str(row.get("部門ID","")).strip()
                 if cid in ["nan", "None", "<NA>", ""]: cid = None
@@ -482,49 +493,33 @@ def page_categories():
             for k, n, m in results: sr(k, n, m)
 
 # ============================================================
-# ページ 3: 設定 (共有可能)
+# ページ: 表示設定
 # ============================================================
-def page_settings():
+def page_display_settings():
+    if "access_token" not in st.session_state:
+        st.warning("左のメニューから「ログイン」を行ってください。")
+        st.stop()
+
     inject_css()
-    st.markdown('<div class="main-header">⚙ 設定</div>', unsafe_allow_html=True)
-    cfg = get_config()
-    
-    st.markdown("#### 🔑 スマレジ連携設定 (ブラウザ保存)")
-    st.info("※ この画面で入力した情報はあなたのブラウザ内だけ保持されます。他の人には見えません。")
-    use_sb = st.toggle("サンドボックス環境（テスト用）を使用する", value=cfg.get("use_sandbox", True))
-    
-    cid = st.text_input("契約ID (CONTRACT_ID)", value=cfg.get("contract_id", ""))
-    cli = st.text_input("クライアントID (CLIENT_ID)", value=cfg.get("client_id", ""))
-    sec = st.text_input("クライアントシークレット", value=cfg.get("client_secret", ""), type="password")
-    
-    st.write("##")
-    st.markdown("#### 👁️ スプレッドシートの表示項目追加")
+    st.markdown('<div class="main-header">👁️ 表示設定</div>', unsafe_allow_html=True)
+    st.markdown("#### スプレッドシートの表示項目追加")
     optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
-    cur_vis  = cfg.get("visible_fields",[])
+    cur_vis  = st.session_state.get("visible_fields", [])
     sel_vis  = st.multiselect("表に表示したい項目を選んでください", options=optional, default=[c for c in cur_vis if c in optional])
     
     st.write("##")
     if st.button("設定を保存", type="primary"):
-        update_config_bulk({
-            "contract_id": cid, "client_id": cli, "client_secret": sec,
-            "use_sandbox": use_sb, "visible_fields": sel_vis
-        })
+        st.session_state["visible_fields"] = sel_vis
         st.cache_data.clear()
-        st.success("設定を保存しました！「商品マスター」タブで作業を開始してください。")
-        
-    st.markdown("---")
-    if st.button("スマレジとの接続を確認"):
-        with st.spinner("確認中..."):
-            token = get_token()
-            if token: st.success("スマレジとの接続は正常です！")
-            else: st.error("接続に失敗しました。IDとパスワードを確認してください。")
+        st.success("表示項目を更新しました！左のメニューから「商品マスター」に戻ってください。")
 
 # ============================================================
 # ナビゲーション
 # ============================================================
 nav = st.navigation([
-    st.Page(page_main,       title="商品マスター", icon="📦"),
-    st.Page(page_categories, title="部門マスター", icon="📁"),
-    st.Page(page_settings,   title="設定",         icon="⚙"),
+    st.Page(page_login,            title="ログイン",     icon="🔐"),
+    st.Page(page_main,             title="商品マスター", icon="📦"),
+    st.Page(page_categories,       title="部門マスター", icon="📁"),
+    st.Page(page_display_settings, title="表示設定",     icon="👁️"),
 ])
 nav.run()
