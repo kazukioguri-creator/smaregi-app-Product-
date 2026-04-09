@@ -1,5 +1,7 @@
 streamlit
-pandas
 requests
+pandas
 Pillow
+google-auth
 google-cloud-storage
+streamlit-barcode-scanner
