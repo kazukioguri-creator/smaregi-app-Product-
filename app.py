@@ -8,19 +8,12 @@ import pandas as pd
 from collections import OrderedDict
 from io import BytesIO
 from PIL import Image
-from pathlib import Path
 from google.oauth2 import service_account
 from google.cloud import storage
 
 # ============================================================
 # 定数・ユーティリティ
 # ============================================================
-CONFIG_PATH = Path("smaregi_config.json")
-DEFAULT_CONFIG = {
-    "contract_id": "", "client_id": "", "client_secret": "",
-    "visible_fields": [], "use_sandbox": True,
-}
-
 def safe_int(v, d=0):
     if v is None: return d
     try: return int(v)
@@ -36,32 +29,32 @@ def safe_str(v, d=""):
     return str(v)
 
 # ============================================================
-# 設定管理
+# 設定管理 (🌟マルチユーザー共有対応)
 # ============================================================
-def _load_file_config():
-    cfg = dict(DEFAULT_CONFIG)
-    if CONFIG_PATH.exists():
-        try: cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-        except: pass
-    try:
-        if "CONTRACT_ID" in st.secrets: cfg["contract_id"] = st.secrets["CONTRACT_ID"]
-        if "CLIENT_ID" in st.secrets: cfg["client_id"] = st.secrets["CLIENT_ID"]
-        if "CLIENT_SECRET" in st.secrets: cfg["client_secret"] = st.secrets["CLIENT_SECRET"]
-    except Exception:
-        pass
-    return cfg
-
+# JSONファイルへの保存を廃止し、ブラウザのセッション（メモリ上）のみで管理します。
+# これにより、複数人が同時にアクセスしてもお互いのデータが混ざりません。
 def get_config():
     if "app_config" not in st.session_state:
-        st.session_state.app_config = _load_file_config()
+        st.session_state.app_config = {
+            "contract_id": "", "client_id": "", "client_secret": "",
+            "visible_fields": [], "use_sandbox": True,
+        }
+        # 初期値としてSecretsに値があれば読み込む（オーナー様用）
+        try:
+            if "CONTRACT_ID" in st.secrets: st.session_state.app_config["contract_id"] = st.secrets["CONTRACT_ID"]
+            if "CLIENT_ID" in st.secrets: st.session_state.app_config["client_id"] = st.secrets["CLIENT_ID"]
+            if "CLIENT_SECRET" in st.secrets: st.session_state.app_config["client_secret"] = st.secrets["CLIENT_SECRET"]
+        except Exception:
+            pass
     return st.session_state.app_config
 
 def update_config_bulk(u):
-    cfg = get_config(); cfg.update(u); st.session_state.app_config = cfg
-    try: CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    except: pass
+    cfg = get_config()
+    cfg.update(u)
+    st.session_state.app_config = cfg
 
-def update_config(k, v): update_config_bulk({k: v})
+def update_config(k, v): 
+    update_config_bulk({k: v})
 
 def get_api_base():
     cfg = get_config(); cid = cfg.get("contract_id", "")
@@ -142,39 +135,22 @@ def inject_css():
     * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Meiryo, sans-serif; font-size: 13px; }
     .stApp { background: #ffffff; }
     .block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; max-width: 98% !important; }
-    
     section[data-testid="stSidebar"] { background: #f8f9fa !important; border-right: 1px solid #dee2e6; }
-    
-    .main-header {
-        color: #1e293b; font-size: 1.4rem; font-weight: 700;
-        margin-bottom: 1rem; padding-bottom: .5rem; border-bottom: 2px solid #e2e8f0;
-    }
-    
-    /* ボタンデザイン */
-    .stButton > button[kind="primary"] {
-        background: #10b981 !important; color: white !important; border: none !important;
-        font-weight: 600 !important; border-radius: 4px !important; padding: .5rem 1rem !important;
-    }
+    .main-header { color: #1e293b; font-size: 1.4rem; font-weight: 700; margin-bottom: 1rem; padding-bottom: .5rem; border-bottom: 2px solid #e2e8f0; }
+    .stButton > button[kind="primary"] { background: #10b981 !important; color: white !important; border: none !important; font-weight: 600 !important; border-radius: 4px !important; padding: .5rem 1rem !important; }
     .stButton > button[kind="primary"]:hover { background: #059669 !important; }
-    
-    /* 巨大なデータエディタを画面にフィットさせる */
-    [data-testid="stDataEditor"] {
-        border: 1px solid #cbd5e1 !important;
-        border-radius: 4px !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
+    [data-testid="stDataEditor"] { border: 1px solid #cbd5e1 !important; border-radius: 4px !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     [data-testid="stDataEditor"] input { ime-mode: active !important; }
-    
-    /* アラート・結果表示 */
     .r-row { padding: .4rem .8rem; border-radius: 4px; margin: .2rem 0; font-size: .85rem; font-weight: 500; display: flex; align-items: center; gap: .5rem; }
     .r-ok   { background: #ecfdf5; color: #065f46; border-left: 4px solid #10b981; }
+    .r-warn { background: #fffbeb; color: #b45309; border-left: 4px solid #f59e0b; }
     .r-err  { background: #fef2f2; color: #991b1b; border-left: 4px solid #ef4444; }
     </style>
     """, unsafe_allow_html=True)
 
 def sr(kind, name, msg):
-    cls  = {"ok":"r-ok","err":"r-err"}.get(kind,"r-ok")
-    icon = {"ok":"✓","err":"✕"}.get(kind,"●")
+    cls  = {"ok":"r-ok","warn":"r-warn","err":"r-err"}.get(kind,"r-ok")
+    icon = {"ok":"✓","warn":"△","err":"✕"}.get(kind,"●")
     st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
@@ -204,6 +180,7 @@ def get_gcp_credentials():
     gcp_dict = json.loads(gcp_json_str)
     return service_account.Credentials.from_service_account_info(gcp_dict)
 
+# 🌟 画像＆アイコン 同時セットロジック
 def upload_and_link_image(token, product_id, file_obj):
     try:
         img = Image.open(file_obj)
@@ -231,24 +208,43 @@ def upload_and_link_image(token, product_id, file_obj):
         except:
             final_url = signed_url
 
-        url = f"{get_api_base()}/products/{product_id}/image"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        payload = {"imageUrl": final_url}
         
-        last_r = None
+        # 1. 商品画像の登録
+        url_img = f"{get_api_base()}/products/{product_id}/image"
+        ok_img, msg_img = False, ""
         for attempt in range(4):
             try:
-                r = requests.put(url, headers=headers, json={"imageUrl": final_url}, timeout=30)
-                last_r = r
-                if r.status_code in (200, 201, 204): return True, "画像連携成功"
-                if r.status_code == 404 and attempt < 3:
-                    time.sleep(2 ** attempt); continue
-                break
-            except:
+                r1 = requests.put(url_img, headers=headers, json=payload, timeout=30)
+                if r1.status_code in (200, 201, 204): ok_img = True; break
+                if r1.status_code == 404 and attempt < 3: time.sleep(2 ** attempt); continue
+                msg_img = r1.text[:50]; break
+            except Exception as e:
                 if attempt < 3: time.sleep(2 ** attempt); continue
-                break
-        return False, f"画像失敗 (HTTP {last_r.status_code if last_r else 'Timeout'})"
+                msg_img = str(e); break
+
+        # 2. アイコン画像の登録
+        url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
+        ok_icon, msg_icon = False, ""
+        for attempt in range(4):
+            try:
+                r2 = requests.put(url_icon, headers=headers, json=payload, timeout=30)
+                if r2.status_code in (200, 201, 204): ok_icon = True; break
+                if r2.status_code == 404 and attempt < 3: time.sleep(2 ** attempt); continue
+                msg_icon = r2.text[:50]; break
+            except Exception as e:
+                if attempt < 3: time.sleep(2 ** attempt); continue
+                msg_icon = str(e); break
+
+        # 結果の判定
+        if ok_img and ok_icon: return True, "画像・アイコンの登録完了"
+        elif ok_img: return False, f"画像OK / アイコン失敗: {msg_icon}"
+        elif ok_icon: return False, f"アイコンOK / 画像失敗: {msg_img}"
+        else: return False, f"画像連携エラー (IMG:{msg_img} / ICON:{msg_icon})"
+        
     except Exception as e:
-        return False, f"画像エラー: {str(e)}"
+        return False, f"システムエラー: {str(e)}"
 
 # ============================================================
 # API: 部門・商品データ取得
@@ -299,7 +295,7 @@ def prod_row(p, visible):
         else: v = safe_str(v, d["default"])
         row[k] = v
     row["productId"] = safe_str(p.get("productId",""))
-    row["画像"] = "" # 画像列は空で初期化
+    row["画像セット"] = "" # 画像列は空で初期化
     return row
 
 def row_to_post_payload(row):
@@ -345,20 +341,15 @@ def page_main():
 
     st.markdown('<div class="main-header">📦 商品マスター (Spreadsheet)</div>', unsafe_allow_html=True)
     
-    st.info("💡 **【Excelライクな操作】** セルを1回クリックしてそのまま文字を打てます（ダブルクリック不要）。矢印キーで移動可能です。表の一番下の「＋」行に入力すると新規登録されます。")
-
     visible = get_visible()
     prods = get_products()
     
-    # オリジナルデータの構築
     original_rows = [prod_row(p, visible) for p in prods]
     original_df = pd.DataFrame(original_rows)
-    display_cols = ["productId"] + visible + ["画像"]
+    display_cols = ["productId"] + visible + ["画像セット"]
     
-    if original_df.empty:
-        original_df = pd.DataFrame(columns=display_cols)
+    if original_df.empty: original_df = pd.DataFrame(columns=display_cols)
 
-    # ツールバー（保存と画像アップロード）
     c1, c2, c3 = st.columns([1.5, 1.5, 1])
     with c1:
         st.write("##")
@@ -370,11 +361,8 @@ def page_main():
     with c3:
         st.write("##")
         if st.button("🔄 最新データに更新", use_container_width=True):
-            st.cache_data.clear()
-            _refresh_cat_options()
-            st.rerun()
+            st.cache_data.clear(); _refresh_cat_options(); st.rerun()
 
-    # Data Editor の設定
     cat_opts = _cat_options()
     ccfg = {}
     for k in visible:
@@ -385,22 +373,11 @@ def page_main():
         else: ccfg[k] = st.column_config.TextColumn(k, max_chars=d.get("max"))
     
     ccfg["productId"] = st.column_config.TextColumn("商品ID (空欄=新規)", disabled=True)
-    if bmap:
-        ccfg["画像"] = st.column_config.SelectboxColumn("画像を設定", options=[""]+list(bmap.keys()), default="")
-    else:
-        ccfg["画像"] = st.column_config.TextColumn("画像を設定 (左でUP)", default="", disabled=True)
+    if bmap: ccfg["画像セット"] = st.column_config.SelectboxColumn("画像セット", options=[""]+list(bmap.keys()), default="")
+    else: ccfg["画像セット"] = st.column_config.TextColumn("画像セット", default="", disabled=True)
 
-    # 巨大なスプレッドシート表示
-    edited_df = st.data_editor(
-        original_df[display_cols],
-        column_config=ccfg,
-        num_rows="dynamic", # 一番下をクリックで新規行追加
-        use_container_width=True,
-        height=600,
-        key="main_editor"
-    )
+    edited_df = st.data_editor(original_df[display_cols], column_config=ccfg, num_rows="dynamic", use_container_width=True, height=600)
 
-    # 保存ロジック（新規と更新の自動判定）
     if btn_save:
         results = []
         with st.spinner("データをスマレジに同期中..."):
@@ -408,58 +385,49 @@ def page_main():
             if not token: st.error("認証エラー"); st.stop()
             
             for idx, nr in edited_df.iterrows():
-                # Streamlitの空行のproductIdはNaNやNoneになるためクレンジング
                 pid = str(nr.get("productId", "")).strip()
                 if pid in ["nan", "None", "<NA>", ""]: pid = None
                 
                 pn = str(nr.get("商品名", "")).strip()
-                if not pn or pn in ["nan", "None", "<NA>"]: continue # 空行は無視
+                if not pn or pn in ["nan", "None", "<NA>"]: continue
                 
-                img_name = str(nr.get("画像", "")).strip()
+                img_name = str(nr.get("画像セット", "")).strip()
                 has_img = img_name and img_name in bmap
                 
                 if not pid:
-                    # 🆕 【新規作成】
+                    # 新規
                     payload = row_to_post_payload(nr)
-                    if not payload.get("categoryId"):
-                        results.append(("err", pn, "部門が未設定のためスキップしました")); continue
-                        
+                    if not payload.get("categoryId"): results.append(("err", pn, "部門未設定スキップ")); continue
                     r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                     if r.status_code in (200, 201):
                         new_pid = r.json().get("productId")
                         if has_img:
                             fo = bmap[img_name]; fo.seek(0)
                             ok, msg = upload_and_link_image(token, new_pid, fo)
-                            results.append(("ok", pn, f"新規登録 & 画像完了 (ID:{new_pid})")) if ok else results.append(("err", pn, f"登録OK / 画像エラー: {msg}"))
-                        else:
-                            results.append(("ok", pn, f"新規登録完了 (ID:{new_pid})"))
-                    else:
-                        results.append(("err", pn, f"新規登録エラー: {r.text[:80]}"))
+                            results.append(("ok", pn, f"新規登録 & {msg}")) if ok else results.append(("warn", pn, f"登録OK / {msg}"))
+                        else: results.append(("ok", pn, "新規登録完了"))
+                    else: results.append(("err", pn, f"新規エラー: {r.text[:80]}"))
                 else:
-                    # 🔄 【既存更新】
+                    # 更新
                     orow = get_original_row(original_df, pid)
                     if orow:
                         dp = diff_payload(orow, nr)
                         if dp:
                             r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
-                            if r.status_code not in (200, 204):
-                                results.append(("err", pn, f"更新エラー: {r.text[:80]}")); continue
+                            if r.status_code not in (200, 204): results.append(("err", pn, f"更新エラー: {r.text[:80]}")); continue
                         
                         if has_img:
                             fo = bmap[img_name]; fo.seek(0)
                             ok, msg = upload_and_link_image(token, pid, fo)
-                            results.append(("ok", pn, "更新 & 画像完了")) if ok else results.append(("err", pn, f"更新OK / 画像エラー: {msg}"))
-                        elif dp:
-                            results.append(("ok", pn, "データ更新完了"))
+                            results.append(("ok", pn, f"更新 & {msg}")) if ok else results.append(("warn", pn, f"更新OK / {msg}"))
+                        elif dp: results.append(("ok", pn, "データ更新完了"))
 
-            st.cache_data.clear()
-            _refresh_cat_options()
+            st.cache_data.clear(); _refresh_cat_options()
         
         if results:
             st.markdown("### 処理結果")
             for k, n, m in results: sr(k, n, m)
-        else:
-            st.success("変更されたデータはありませんでした。")
+        else: st.success("変更されたデータはありませんでした。")
 
 # ============================================================
 # ページ 2: 部門マスター
@@ -467,7 +435,6 @@ def page_main():
 def page_categories():
     inject_css()
     st.markdown('<div class="main-header">📁 部門マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    st.info("💡 表の一番下をクリックして新しい部門名を入力し、保存ボタンを押すと新規追加されます。")
     
     cats = get_categories()
     cat_df = pd.DataFrame([{
@@ -480,15 +447,8 @@ def page_categories():
     btn_save_cat = st.button("💾 部門データの変更・追加を保存する", type="primary")
     
     edited_cats = st.data_editor(
-        cat_df,
-        use_container_width=True,
-        num_rows="dynamic",
-        height=500,
-        column_config={
-            "部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True),
-            "部門名": st.column_config.TextColumn("部門名", required=True),
-            "表示順": st.column_config.NumberColumn("表示順", default=0),
-        }
+        cat_df, use_container_width=True, num_rows="dynamic", height=500,
+        column_config={"部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True), "部門名": st.column_config.TextColumn("部門名", required=True), "表示順": st.column_config.NumberColumn("表示順", default=0)}
     )
 
     if btn_save_cat:
@@ -496,7 +456,6 @@ def page_categories():
         with st.spinner("部門データを同期中..."):
             token = get_token()
             if not token: st.error("認証エラー"); st.stop()
-            
             for idx, row in edited_cats.iterrows():
                 cid = str(row.get("部門ID","")).strip()
                 if cid in ["nan", "None", "<NA>", ""]: cid = None
@@ -505,13 +464,10 @@ def page_categories():
                 cseq = str(safe_int(row.get("表示順", 0)))
 
                 if not cid:
-                    # 新規追加
-                    r = requests.post(f"{get_api_base()}/categories", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},
-                                      json={"categoryName": cname, "displaySequence": cseq})
+                    r = requests.post(f"{get_api_base()}/categories", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json={"categoryName": cname, "displaySequence": cseq})
                     if r.status_code in (200, 201): results.append(("ok", cname, "新規追加完了"))
                     else: results.append(("err", cname, f"追加エラー: {r.text[:80]}"))
                 else:
-                    # 既存更新
                     old = cats[idx] if idx < len(cats) else None
                     if old:
                         ch = {}
@@ -521,22 +477,27 @@ def page_categories():
                             r = requests.patch(f"{get_api_base()}/categories/{cid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=ch)
                             if r.status_code in (200, 204): results.append(("ok", cname, "更新完了"))
                             else: results.append(("err", cname, f"更新エラー: {r.text[:80]}"))
-            st.cache_data.clear()
-            _refresh_cat_options()
-            
+            st.cache_data.clear(); _refresh_cat_options()
         if results:
             for k, n, m in results: sr(k, n, m)
-        else:
-            st.success("変更された部門はありませんでした。")
 
 # ============================================================
-# ページ 3: 設定
+# ページ 3: 設定 (共有可能)
 # ============================================================
 def page_settings():
     inject_css()
     st.markdown('<div class="main-header">⚙ 設定</div>', unsafe_allow_html=True)
     cfg = get_config()
     
+    st.markdown("#### 🔑 スマレジ連携設定 (ブラウザ保存)")
+    st.info("※ この画面で入力した情報はあなたのブラウザ内だけ保持されます。他の人には見えません。")
+    use_sb = st.toggle("サンドボックス環境（テスト用）を使用する", value=cfg.get("use_sandbox", True))
+    
+    cid = st.text_input("契約ID (CONTRACT_ID)", value=cfg.get("contract_id", ""))
+    cli = st.text_input("クライアントID (CLIENT_ID)", value=cfg.get("client_id", ""))
+    sec = st.text_input("クライアントシークレット", value=cfg.get("client_secret", ""), type="password")
+    
+    st.write("##")
     st.markdown("#### 👁️ スプレッドシートの表示項目追加")
     optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
     cur_vis  = cfg.get("visible_fields",[])
@@ -544,20 +505,22 @@ def page_settings():
     
     st.write("##")
     if st.button("設定を保存", type="primary"):
-        update_config("visible_fields", sel_vis)
+        update_config_bulk({
+            "contract_id": cid, "client_id": cli, "client_secret": sec,
+            "use_sandbox": use_sb, "visible_fields": sel_vis
+        })
         st.cache_data.clear()
-        st.success("表示項目を更新しました！左のメニューから「商品マスター」に戻ってください。")
+        st.success("設定を保存しました！「商品マスター」タブで作業を開始してください。")
         
     st.markdown("---")
-    st.markdown("#### 🔌 API接続テスト")
     if st.button("スマレジとの接続を確認"):
         with st.spinner("確認中..."):
             token = get_token()
             if token: st.success("スマレジとの接続は正常です！")
-            else: st.error("接続に失敗しました。Secretsの設定を確認してください。")
+            else: st.error("接続に失敗しました。IDとパスワードを確認してください。")
 
 # ============================================================
-# ナビゲーション (左メニュー)
+# ナビゲーション
 # ============================================================
 nav = st.navigation([
     st.Page(page_main,       title="商品マスター", icon="📦"),
