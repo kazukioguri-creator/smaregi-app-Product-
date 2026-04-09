@@ -342,14 +342,9 @@ def page_scanner_form():
                     form_vals[k] = st.text_input(k, value=default_data[k])
 
         st.markdown("---")
-        st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
-        img_method = st.radio("画像の設定方法", ["カメラで今すぐ撮る", "スマホのフォルダから選ぶ", "設定しない"], horizontal=True, label_visibility="collapsed")
-        
-        img_file = None
-        if img_method == "カメラで今すぐ撮る":
-            img_file = st.camera_input("商品の写真を撮影")
-        elif img_method == "スマホのフォルダから選ぶ":
-            img_file = st.file_uploader("画像ファイルを選択", type=["jpg","jpeg","png"])
+st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
+        st.caption("👇 タップすると「カメラ」が確実に起動します")
+        img_file = st.file_uploader("画像を撮影、または選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
         
         st.write("##")
         submit_btn = st.button("🚀 この内容でスマレジに登録する", type="primary")
