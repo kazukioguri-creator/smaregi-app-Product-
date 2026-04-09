@@ -42,7 +42,7 @@ def get_auth_url():
     return f"https://id.{dom}/app/{cid}/token"
 
 # ============================================================
-# API: 認証 (裏側で自動的に鍵を取得する機能)
+# API: 認証 (裏側で自動的に鍵を取得)
 # ============================================================
 def get_token():
     try:
@@ -75,10 +75,8 @@ def get_token():
 # ============================================================
 FIELD_DEFS = OrderedDict([
     ("商品名",        {"api":"productName",          "type":"text",    "default":"",         "required":True, "core":True, "max":85, "send_empty":True, "post":True}),
-    ("商品コード",    {"api":"productCode",          "type":"text",    "default":"",         "required":False,"core":True, "max":20, "send_empty":False,"post":True}),
     ("商品価格",      {"api":"price",                "type":"number",  "default":0,          "required":True, "core":True, "max":None,"send_empty":True,"post":True}),
     ("部門ID",        {"api":"categoryId",           "type":"category","default":"",         "required":True, "core":True, "max":None,"send_empty":False,"post":True}),
-    # --- ここから下は「詳細設定」に入る非コア項目 ---
     ("原価",          {"api":"cost",                 "type":"number",  "default":0,          "required":False,"core":False,"max":None,"send_empty":False,"post":True}),
     ("税区分",        {"api":"taxDivision",          "type":"select",  "default":"0:税込",   "required":False,"core":False,"max":None,"send_empty":False,"post":True,
         "options":["0:税込","1:税抜","2:非課税"]}),
@@ -121,48 +119,38 @@ def _refresh_cat_options():
         del st.session_state["cat_options_cache"]
 
 # ============================================================
-# CSS (📱スマホ特化のUI/UX調整)
+# CSS (📱スマホネイティブアプリ風 UI/UX)
 # ============================================================
 def inject_css():
     st.markdown("""
     <style>
-    /* iOS Safariでの入力ズーム防止のためにフォントサイズを16px以上に固定 */
-    * { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Meiryo, sans-serif; }
+    * { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; }
     input, select, textarea, .stSelectbox div { font-size: 16px !important; }
+    .stApp { background: #f1f5f9; }
+    .block-container { padding-top: 1rem !important; padding-bottom: 5rem !important; max-width: 600px !important; margin: 0 auto;}
     
-    .stApp { background: #f8fafc; }
-    .block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; max-width: 800px !important; }
-    section[data-testid="stSidebar"] { background: #ffffff !important; border-right: 1px solid #e2e8f0; }
+    /* ステップカードのUI */
+    .step-card { background: #ffffff; padding: 1.5rem; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 1.2rem; border: 1px solid #e2e8f0; }
+    .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1rem; }
+    .step-number { background: #2563eb; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
+    .step-title { color: #0f172a; font-size: 1.2rem; font-weight: 800; }
     
-    /* スマホで押しやすい巨大なボタン */
-    .stButton > button[kind="primary"] { 
-        background: #2563eb !important; color: white !important; border: none !important; 
-        font-weight: bold !important; border-radius: 8px !important; 
-        padding: 0.8rem 1rem !important; font-size: 1.1rem !important; 
-        width: 100%; box-shadow: 0 4px 6px rgba(37,99,235,0.2);
-    }
+    /* 巨大なボタン群 */
+    .stButton > button { border-radius: 12px !important; font-weight: 700 !important; padding: 0.75rem 1rem !important; font-size: 1.05rem !important; width: 100%; transition: transform 0.1s; }
+    .stButton > button:active { transform: scale(0.97); }
+    .stButton > button[kind="primary"] { background: #2563eb !important; color: white !important; border: none !important; box-shadow: 0 4px 6px rgba(37,99,235,0.25); }
     .stButton > button[kind="primary"]:hover { background: #1d4ed8 !important; }
-    .stButton > button[kind="secondary"] {
-        border-radius: 8px !important; padding: 0.6rem 1rem !important; font-weight: bold !important; width: 100%;
-    }
     
-    /* フォームの見た目調整 */
-    .form-panel { background: #ffffff; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 1.5rem; border: 1px solid #e2e8f0;}
-    .main-header { color: #0f172a; font-size: 1.5rem; font-weight: 800; margin-bottom: 0.5rem; }
-    .sub-header { color: #64748b; font-size: 0.9rem; margin-bottom: 1.5rem; }
-    
-    /* アラート・結果表示 */
-    .r-row { padding: .8rem 1rem; border-radius: 8px; margin: .5rem 0; font-size: 1rem; font-weight: bold; display: flex; align-items: center; gap: .5rem; }
-    .r-ok   { background: #dcfce7; color: #166534; border-left: 5px solid #22c55e; }
-    .r-warn { background: #fef9c3; color: #854d0e; border-left: 5px solid #eab308; }
-    .r-err  { background: #fee2e2; color: #991b1b; border-left: 5px solid #ef4444; }
+    .r-row { padding: 1rem; border-radius: 12px; margin: .5rem 0; font-size: 1.05rem; font-weight: bold; display: flex; align-items: center; gap: .5rem; }
+    .r-ok   { background: #dcfce7; color: #166534; border-left: 6px solid #22c55e; box-shadow: 0 2px 5px rgba(0,0,0,0.05);}
+    .r-err  { background: #fee2e2; color: #991b1b; border-left: 6px solid #ef4444; }
     </style>
     """, unsafe_allow_html=True)
 
 def sr(kind, name, msg):
-    cls  = {"ok":"r-ok","warn":"r-warn","err":"r-err"}.get(kind,"r-ok")
-    icon = {"ok":"✅","warn":"⚠️","err":"❌"}.get(kind,"●")
-    st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
+    cls  = {"ok":"r-ok","err":"r-err"}.get(kind,"r-ok")
+    icon = {"ok":"✅","err":"❌"}.get(kind,"●")
+    st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 6px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
 # API: GCS画像登録 (画像・アイコン同時設定)
@@ -201,30 +189,25 @@ def upload_and_link_image(token, product_id, file_obj):
         payload = {"imageUrl": final_url}
         
         url_img = f"{get_api_base()}/products/{product_id}/image"
-        ok_img, msg_img = False, ""
-        for attempt in range(3):
+        ok_img = False
+        for _ in range(3):
             try:
                 r1 = requests.put(url_img, headers=headers, json=payload, timeout=15)
                 if r1.status_code in (200, 201, 204): ok_img = True; break
                 if r1.status_code == 404: time.sleep(1); continue
-                msg_img = r1.text[:50]; break
-            except Exception as e: time.sleep(1); msg_img = str(e); continue
+            except: time.sleep(1); continue
 
         url_icon = f"{get_api_base()}/products/{product_id}/icon_image"
-        ok_icon, msg_icon = False, ""
-        for attempt in range(3):
+        ok_icon = False
+        for _ in range(3):
             try:
                 r2 = requests.put(url_icon, headers=headers, json=payload, timeout=15)
                 if r2.status_code in (200, 201, 204): ok_icon = True; break
                 if r2.status_code == 404: time.sleep(1); continue
-                msg_icon = r2.text[:50]; break
-            except Exception as e: time.sleep(1); msg_icon = str(e); continue
+            except: time.sleep(1); continue
 
         if ok_img and ok_icon: return True, "画像・アイコン登録完了"
-        elif ok_img: return False, f"画像OK/アイコン失敗"
-        elif ok_icon: return False, f"アイコンOK/画像失敗"
-        else: return False, f"画像連携エラー"
-        
+        else: return False, "画像の一部連携に失敗"
     except Exception as e: return False, f"システムエラー: {str(e)}"
 
 # ============================================================
@@ -262,11 +245,8 @@ def find_product_by_code(prods, code):
         if p.get("productCode") == code: return p
     return None
 
-# ============================================================
-# ペイロード生成
-# ============================================================
-def create_payload(form_data):
-    payload = {}
+def create_payload(form_data, code):
+    payload = {"productCode": code}
     for k, d in FIELD_DEFS.items():
         if k not in form_data: continue
         v = form_data[k]
@@ -277,7 +257,7 @@ def create_payload(form_data):
     return payload
 
 # ============================================================
-# ページ 1: 📱 スキャン＆登録 (現場用専用フォーム)
+# ページ 1: 📱 スキャン＆登録 (現場用ネイティブ風UI)
 # ============================================================
 def page_scanner_form():
     inject_css()
@@ -286,27 +266,72 @@ def page_scanner_form():
         st.error("スマレジとの認証に失敗しました。")
         st.stop()
 
-    st.markdown('<div class="main-header">📱 スキャン＆登録</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">スマホのカメラ機能を使ってバーコードを読み取り、商品を登録します。</div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center; padding-bottom:1rem;"><h2 style="margin:0; color:#0f172a;">📱 現場登録ツール</h2><p style="color:#64748b; font-size:14px;">現場での商品追加・写真登録を行います</p></div>', unsafe_allow_html=True)
+
+    # ステート初期化
+    if "input_mode" not in st.session_state:
+        st.session_state.input_mode = None  # "scan", "auto", None
+    if "final_code" not in st.session_state:
+        st.session_state.final_code = ""
 
     prods = get_products(token)
     cat_opts = _cat_options(token)
 
-    # 1. 商品コードの入力（スキャン）
-    st.markdown('<div class="form-panel">', unsafe_allow_html=True)
-    code_input = st.text_input("1️⃣ バーコードを読み取る", placeholder="ここをタップしてカメラ起動・スキャン", key="scan_code")
-    st.markdown('</div>', unsafe_allow_html=True)
+    # ---------------------------------------------------------
+    # STEP 1: 商品コードの登録方法
+    # ---------------------------------------------------------
+    st.markdown("""
+        <div class="step-card">
+            <div class="step-header">
+                <div class="step-number">1</div>
+                <div class="step-title">商品コードをどうしますか？</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📸 バーコード読取", type="primary" if st.session_state.input_mode == "scan" else "secondary"):
+            st.session_state.input_mode = "scan"
+            st.session_state.final_code = ""
+            st.rerun()
+    with col2:
+        if st.button("⚙️ 自動採番", type="primary" if st.session_state.input_mode == "auto" else "secondary"):
+            st.session_state.input_mode = "auto"
+            st.session_state.final_code = f"AUTO-{int(time.time() * 1000)}"
+            st.rerun()
+
+    code_input = ""
+    
+    # 選択後のアクションUI
+    if st.session_state.input_mode == "scan":
+        st.info("👇 下の枠をタップし、スマホキーボードの「テキストスキャン（カメラアイコン）」でバーコードを読み取ってください")
+        code_input = st.text_input("バーコード", placeholder="ここをタップしてスキャン...", key="scan_input")
+    elif st.session_state.input_mode == "auto":
+        code_input = st.session_state.final_code
+        st.success(f"✅ システムが自動で番号を割り当てました: **{code_input}**")
+
+    # ---------------------------------------------------------
+    # STEP 2 & 3: 情報入力と写真撮影 (コードが確定してから表示)
+    # ---------------------------------------------------------
     if code_input:
         target_prod = find_product_by_code(prods, code_input)
         is_new = target_prod is None
         
+        st.markdown("""
+            <div class="step-card" style="margin-top:20px;">
+                <div class="step-header">
+                    <div class="step-number">2</div>
+                    <div class="step-title">商品情報を入力</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
         if is_new:
-            st.success("✨ 新しいバーコードです。新商品を登録します。")
+            st.caption("✨ 新規商品の登録です")
             default_data = {k: d["default"] for k, d in FIELD_DEFS.items()}
-            default_data["商品コード"] = code_input
         else:
-            st.info(f"🔄 既存の商品が見つかりました。「{target_prod.get('productName')}」を更新します。")
+            st.warning(f"🔄 既存の商品が見つかりました。「{target_prod.get('productName')}」を上書き更新します。")
             default_data = {}
             for k, d in FIELD_DEFS.items():
                 val = target_prod.get(d["api"], d["default"])
@@ -317,22 +342,16 @@ def page_scanner_form():
                     val = next((o for o in cat_opts if o.startswith(cid+":")), "") if cid else ""
                 default_data[k] = val
         
-        st.markdown('<div class="form-panel">', unsafe_allow_html=True)
-        st.markdown("#### 2️⃣ 商品情報を入力")
-        
-        # コア項目の入力
         form_vals = {}
-        form_vals["商品コード"] = code_input
-        form_vals["商品名"] = st.text_input("商品名 必須", value=default_data["商品名"])
-        form_vals["商品価格"] = st.number_input("価格 必須", value=int(default_data["商品価格"]), step=100)
+        form_vals["商品名"] = st.text_input("商品名 (必須)", value=default_data["商品名"])
+        form_vals["商品価格"] = st.number_input("価格 (必須)", value=int(default_data["商品価格"]), step=100)
         
         cat_index = cat_opts.index(default_data["部門ID"]) if default_data["部門ID"] in cat_opts else 0
-        form_vals["部門ID"] = st.selectbox("部門 必須", cat_opts, index=cat_index)
+        form_vals["部門ID"] = st.selectbox("部門 (必須)", cat_opts, index=cat_index)
 
-        # 詳細設定（アコーディオン）
-        with st.expander("⚙️ 詳細設定を開く（原価、税設定など）"):
+        with st.expander("⚙️ 詳細設定（原価、税区分など）"):
             for k, d in FIELD_DEFS.items():
-                if d["core"] or k == "商品コード": continue
+                if d["core"]: continue
                 if d["type"] == "select":
                     idx = d["options"].index(default_data[k]) if default_data[k] in d["options"] else 0
                     form_vals[k] = st.selectbox(k, d["options"], index=idx)
@@ -341,16 +360,21 @@ def page_scanner_form():
                 else:
                     form_vals[k] = st.text_input(k, value=default_data[k])
 
-        st.markdown("---")
+        # 写真設定
+        st.markdown("""
+            <div class="step-card" style="margin-top:20px;">
+                <div class="step-header">
+                    <div class="step-number">3</div>
+                    <div class="step-title">商品の写真を設定 (任意)</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
         
-        # 🌟 修正箇所：バグの元となっていたst.camera_inputを廃止し、スマホで確実に動くファイル選択ボタン1つに統合！
-        st.markdown("#### 3️⃣ 画像を撮影・設定（任意）")
-        st.caption("👇 タップすると「カメラ」が確実に起動します")
-        img_file = st.file_uploader("画像を撮影、または選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
+        st.info("👇 枠をタップすると、スマホの「カメラを起動」が選べます")
+        img_file = st.file_uploader("写真を撮影、または選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
         
         st.write("##")
         submit_btn = st.button("🚀 この内容でスマレジに登録する", type="primary")
-        st.markdown('</div>', unsafe_allow_html=True)
 
         # 送信処理
         if submit_btn:
@@ -358,37 +382,35 @@ def page_scanner_form():
                 st.error("商品名と部門は必須です。")
                 st.stop()
 
-            payload = create_payload(form_vals)
+            payload = create_payload(form_vals, code_input)
             
             with st.spinner("スマレジに送信中..."):
                 if is_new:
-                    # 新規登録
                     r = requests.post(f"{get_api_base()}/products", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                     if r.status_code in (200, 201):
                         pid = r.json().get("productId")
                         if img_file:
                             ok, msg = upload_and_link_image(token, pid, img_file)
-                            sr("ok", form_vals["商品名"], f"新規登録＆画像セット完了") if ok else sr("warn", form_vals["商品名"], f"登録OK / 画像エラー: {msg}")
+                            sr("ok", form_vals["商品名"], "新規登録＆画像セット完了") if ok else sr("err", form_vals["商品名"], "画像エラー")
                         else:
                             sr("ok", form_vals["商品名"], "新規登録完了")
-                        st.cache_data.clear()
-                    else:
-                        sr("err", "登録失敗", r.text[:100])
+                    else: sr("err", "登録失敗", r.text[:50])
                 else:
-                    # 更新
                     pid = target_prod.get("productId")
                     r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                     if r.status_code in (200, 204):
                         if img_file:
                             ok, msg = upload_and_link_image(token, pid, img_file)
-                            sr("ok", form_vals["商品名"], f"更新＆画像セット完了") if ok else sr("warn", form_vals["商品名"], f"更新OK / 画像エラー: {msg}")
+                            sr("ok", form_vals["商品名"], "更新＆画像セット完了") if ok else sr("err", form_vals["商品名"], "画像エラー")
                         else:
                             sr("ok", form_vals["商品名"], "データ更新完了")
-                        st.cache_data.clear()
-                    else:
-                        sr("err", "更新失敗", r.text[:100])
+                    else: sr("err", "更新失敗", r.text[:50])
                 
-                # 登録完了後、少し待ってから画面をリセット
+                st.cache_data.clear()
+                
+                # 送信完了後、初期状態にリセットしてリロード
+                st.session_state.input_mode = None
+                st.session_state.final_code = ""
                 time.sleep(2)
                 st.rerun()
 
@@ -401,9 +423,8 @@ def page_spreadsheet():
     if not token: st.error("認証エラー"); st.stop()
 
     st.markdown('<div class="main-header">💻 商品一括管理</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">PCでの価格の一括変更などに特化した画面です。（※新規作成やバーコード入力はスマホの「スキャン＆登録」をご利用ください）</div>', unsafe_allow_html=True)
+    st.info("PCでの価格の一括変更などに特化した画面です。（※新規作成やバーコード入力はスマホの「スキャン＆登録」をご利用ください）")
 
-    # スプレッドシート用の表示項目設定
     with st.expander("👁️ スプレッドシートの表示列を設定"):
         optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
         cur_vis  = st.session_state.get("visible_fields", [])
@@ -415,11 +436,10 @@ def page_spreadsheet():
     visible = get_visible()
     prods = get_products(token)
     
-    # スプレッドシート用データの構築
     cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
     rows = []
     for p in prods:
-        row = {"productId": safe_str(p.get("productId",""))}
+        row = {"productId": safe_str(p.get("productId","")), "商品コード": safe_str(p.get("productCode",""))}
         for k in visible:
             d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
             if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
@@ -432,7 +452,7 @@ def page_spreadsheet():
         rows.append(row)
         
     df = pd.DataFrame(rows)
-    display_cols = ["productId"] + visible
+    display_cols = ["productId", "商品コード"] + visible
     if df.empty: df = pd.DataFrame(columns=display_cols)
 
     c1, c2 = st.columns([2, 1])
@@ -444,17 +464,15 @@ def page_spreadsheet():
     cat_opts = _cat_options(token)
     ccfg = {
         "productId": st.column_config.TextColumn("商品ID", disabled=True),
-        "商品コード": st.column_config.TextColumn("商品コード", disabled=True) # スプレッドシートからは変更不可にする
+        "商品コード": st.column_config.TextColumn("商品コード", disabled=True)
     }
     for k in visible:
-        if k == "商品コード": continue
         d = FIELD_DEFS[k]
         if d["type"] == "category": ccfg[k] = st.column_config.SelectboxColumn(k, options=cat_opts)
         elif d["type"] == "select": ccfg[k] = st.column_config.SelectboxColumn(k, options=d.get("options",[]))
         elif d["type"] == "number": ccfg[k] = st.column_config.NumberColumn(k)
         else: ccfg[k] = st.column_config.TextColumn(k, max_chars=d.get("max"))
 
-    # 一括編集特化のため、num_rows="fixed" にして新規行追加を無効化
     edited_df = st.data_editor(df[display_cols], column_config=ccfg, num_rows="fixed", use_container_width=True, height=600)
 
     if btn_save:
@@ -467,7 +485,7 @@ def page_spreadsheet():
                 orow = df[df['productId'] == pid].iloc[0].to_dict()
                 dp = {}
                 for k,d in FIELD_DEFS.items():
-                    if k not in orow or k not in nr or k == "商品コード": continue
+                    if k not in orow or k not in nr: continue
                     ov, nv = orow[k], nr[k]
                     if d["type"] == "select": ov,nv = sel2api(ov),sel2api(nv)
                     elif d["type"] == "category":
@@ -481,64 +499,17 @@ def page_spreadsheet():
                     r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
                     pn = str(nr.get("商品名", "不明"))
                     if r.status_code in (200, 204): results.append(("ok", pn, "データ更新完了"))
-                    else: results.append(("err", pn, f"更新エラー: {r.text[:80]}"))
+                    else: results.append(("err", pn, f"更新エラー"))
             st.cache_data.clear()
         if results:
             for k, n, m in results: sr(k, n, m)
         else: st.success("変更されたデータはありませんでした。")
 
 # ============================================================
-# ページ 3: 📁 部門マスター
-# ============================================================
-def page_categories():
-    inject_css()
-    token = get_token()
-    if not token: st.error("認証エラー"); st.stop()
-
-    st.markdown('<div class="main-header">📁 部門マスター</div>', unsafe_allow_html=True)
-    cats = get_categories(token)
-    cat_df = pd.DataFrame([{
-        "部門ID": safe_str(c.get("categoryId","")), "部門名": safe_str(c.get("categoryName","")), "表示順": safe_int(c.get("displaySequence"), 0),
-    } for c in cats]) if cats else pd.DataFrame(columns=["部門ID","部門名","表示順"])
-
-    btn_save_cat = st.button("💾 部門データの変更・追加を保存する", type="primary")
-    edited_cats = st.data_editor(cat_df, use_container_width=True, num_rows="dynamic", height=500,
-        column_config={"部門ID": st.column_config.TextColumn("部門ID (空欄=新規)", disabled=True), "部門名": st.column_config.TextColumn("部門名", required=True), "表示順": st.column_config.NumberColumn("表示順", default=0)})
-
-    if btn_save_cat:
-        results = []
-        with st.spinner("部門データを同期中..."):
-            for idx, row in edited_cats.iterrows():
-                cid = str(row.get("部門ID","")).strip()
-                if cid in ["nan", "None", "<NA>", ""]: cid = None
-                cname = str(row.get("部門名","")).strip()
-                if not cname or cname in ["nan", "None", "<NA>"]: continue
-                cseq = str(safe_int(row.get("表示順", 0)))
-
-                if not cid:
-                    r = requests.post(f"{get_api_base()}/categories", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json={"categoryName": cname, "displaySequence": cseq})
-                    if r.status_code in (200, 201): results.append(("ok", cname, "新規追加完了"))
-                    else: results.append(("err", cname, f"追加エラー: {r.text[:80]}"))
-                else:
-                    old = cats[idx] if idx < len(cats) else None
-                    if old:
-                        ch = {}
-                        if cname != safe_str(old.get("categoryName","")): ch["categoryName"] = cname
-                        if cseq != str(safe_int(old.get("displaySequence",0))): ch["displaySequence"] = cseq
-                        if ch:
-                            r = requests.patch(f"{get_api_base()}/categories/{cid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=ch)
-                            if r.status_code in (200, 204): results.append(("ok", cname, "更新完了"))
-                            else: results.append(("err", cname, f"更新エラー: {r.text[:80]}"))
-            st.cache_data.clear(); _refresh_cat_options()
-        if results:
-            for k, n, m in results: sr(k, n, m)
-
-# ============================================================
 # ナビゲーション
 # ============================================================
 nav = st.navigation([
-    st.Page(page_scanner_form, title="スキャン＆登録", icon="📱"),
-    st.Page(page_spreadsheet,  title="商品一括管理",   icon="💻"),
-    st.Page(page_categories,   title="部門マスター",   icon="📁"),
+    st.Page(page_scanner_form, title="スキャン＆登録 (スマホ)", icon="📱"),
+    st.Page(page_spreadsheet,  title="商品一括管理 (PC)",     icon="💻"),
 ])
 nav.run()
