@@ -298,38 +298,65 @@ def page_scanner_form():
 
     code_input = ""
     
-    # 🌟 HTML5スキャナーの埋め込み (カメラ起動機能)
+    # 🌟 読取専用・高感度チューニング済みスキャナー
     if st.session_state.input_mode == "scan":
-        st.info("👇 【初回のみカメラ許可が必要です】カメラにバーコードをかざし、下の枠に数字を入力してください")
+        st.info("💡 **コツ**: スマホを商品から10〜15cmほど離して、線にピントが合うようにすると読み取りやすいです！")
         
-        # Javascriptで動く本格的なバーコードリーダーをHTMLとして埋め込みます
         components.html("""
         <script src="https://unpkg.com/html5-qrcode"></script>
-        <div id="qr-reader" style="width:100%; border-radius: 8px; overflow: hidden; border: 2px solid #cbd5e1;"></div>
+        <div id="qr-reader" style="width:100%; border-radius: 8px; overflow: hidden; border: 2px solid #cbd5e1; background:#000;"></div>
         <div style="text-align:center; margin-top: 15px; font-family: sans-serif;">
             <p style="font-size: 14px; color: #64748b; margin:0;">読み取った数字</p>
-            <div id="qr-reader-results" style="font-weight: bold; font-size: 24px; color: #2563eb;">---</div>
+            <div id="qr-reader-results" style="font-weight: bold; font-size: 28px; color: #94a3b8; transition: color 0.3s;">---</div>
+            <p id="copy-msg" style="font-size: 12px; color: #22c55e; margin-top: 5px; height: 15px;"></p>
         </div>
         <script>
             function onScanSuccess(decodedText, decodedResult) {
-                document.getElementById('qr-reader-results').innerText = decodedText;
+                var resDiv = document.getElementById('qr-reader-results');
+                var msgDiv = document.getElementById('copy-msg');
+                resDiv.innerText = decodedText;
+                resDiv.style.color = "#2563eb"; // 青色にして成功をアピール
+                
+                // クリップボードに自動コピーを試みる
+                if(navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(decodedText).then(function() {
+                        msgDiv.innerText = "📋 コピーしました！下の枠に長押しで貼り付けてください";
+                    });
+                } else {
+                    msgDiv.innerText = "👆 数字を覚えて下の枠に入力してください";
+                }
             }
-            // 背面カメラ(environment)を優先して起動
-            var html5QrcodeScanner = new Html5QrcodeScanner(
-                "qr-reader", { fps: 10, qrbox: {width: 250, height: 100}, facingMode: "environment" });
+            
+            // 商品バーコード（EAN/UPCなど）専用の超高感度設定
+            const config = {
+                fps: 15,
+                qrbox: { width: 280, height: 120 }, // 横長のバーコードに特化した枠
+                formatsToSupport: [
+                    Html5QrcodeSupportedFormats.EAN_13,
+                    Html5QrcodeSupportedFormats.EAN_8,
+                    Html5QrcodeSupportedFormats.UPC_A,
+                    Html5QrcodeSupportedFormats.UPC_E,
+                    Html5QrcodeSupportedFormats.CODE_128,
+                    Html5QrcodeSupportedFormats.CODE_39
+                ],
+                experimentalFeatures: {
+                    useBarCodeDetectorIfSupported: true
+                }
+            };
+            var html5QrcodeScanner = new Html5QrcodeScanner("qr-reader", config, false);
             html5QrcodeScanner.render(onScanSuccess);
         </script>
-        """, height=380)
+        """, height=420)
         
         # 読み取った数字をユーザーが手動で貼り付ける枠
-        code_input = st.text_input("上の数字を入力（またはコピー＆ペースト）してください", placeholder="例: 4901234567890")
+        code_input = st.text_input("上の数字を入力（またはペースト）してください", placeholder="例: 4901234567890")
 
     elif st.session_state.input_mode == "auto":
         code_input = st.session_state.final_code
         st.success(f"✅ システムが自動で番号を割り当てました: **{code_input}**")
 
     # ---------------------------------------------------------
-    # STEP 2 & 3: 情報入力と写真撮影 (コードが確定してから表示)
+    # STEP 2 & 3: 情報入力と写真撮影
     # ---------------------------------------------------------
     if code_input:
         target_prod = find_product_by_code(prods, code_input)
