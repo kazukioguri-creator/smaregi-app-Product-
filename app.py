@@ -30,58 +30,45 @@ def safe_str(v, d=""):
     return str(v)
 
 def get_api_base():
-    cid = st.session_state.get("contract_id", "")
-    dom = "smaregi.dev" if st.session_state.get("use_sandbox", True) else "smaregi.jp"
+    cid = st.secrets["CONTRACT_ID"]
+    use_sandbox = st.secrets.get("USE_SANDBOX", True)
+    dom = "smaregi.dev" if use_sandbox else "smaregi.jp"
     return f"https://api.{dom}/{cid}/pos"
 
+def get_auth_url():
+    cid = st.secrets["CONTRACT_ID"]
+    use_sandbox = st.secrets.get("USE_SANDBOX", True)
+    dom = "smaregi.dev" if use_sandbox else "smaregi.jp"
+    return f"https://id.{dom}/app/{cid}/token"
+
 # ============================================================
-# OAuth ログインコールバック処理 (最優先で実行)
+# API: 認証 (裏側で自動的に鍵を取得する機能)
 # ============================================================
-# スマレジのログイン画面から戻ってきた時にURLにくっついている暗号(code)をキャッチして鍵に交換します。
-if "code" in st.query_params and "state" in st.query_params:
-    code = st.query_params["code"]
-    state = st.query_params["state"]
+def get_token():
+    try:
+        ci = st.secrets["CLIENT_ID"]
+        cs = st.secrets["CLIENT_SECRET"]
+    except KeyError:
+        return None
+
+    ck = "server_auth_token"
+    cached = st.session_state.get(ck)
+    if cached and cached.get("ea", 0) > time.time(): 
+        return cached["at"]
     
     try:
-        # state に仕込んでおいた 契約ID と 環境情報 を取り出す
-        contract_id, env = state.split("::")
-        is_sandbox = (env == "dev")
-        
-        client_id = st.secrets["CLIENT_ID"]
-        client_secret = st.secrets["CLIENT_SECRET"]
-        redirect_uri = st.secrets["REDIRECT_URI"]
-        
-        token_url = f"https://id.smaregi.{env}/app/{contract_id}/token"
-        cred = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-        
-        headers = {
-            "Authorization": f"Basic {cred}",
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri
-        }
-        
-        # 鍵(アクセストークン)の交換リクエスト
-        res = requests.post(token_url, headers=headers, data=payload)
-        if res.status_code == 200:
-            data = res.json()
-            st.session_state["access_token"] = data["access_token"]
-            st.session_state["contract_id"] = contract_id
-            st.session_state["use_sandbox"] = is_sandbox
-            st.session_state["visible_fields"] = [] # 初期設定
-            st.success("ログインに成功しました！")
-        else:
-            st.error(f"認証エラー: {res.text}")
-    except Exception as e:
-        st.error(f"ログイン処理エラー: {e}")
-        
-    # URLの暗号を消して画面をスッキリさせる
-    st.query_params.clear()
-    time.sleep(1)
-    st.rerun()
+        cred = base64.b64encode(f"{ci}:{cs}".encode()).decode()
+        r = requests.post(get_auth_url(),
+            headers={"Authorization":f"Basic {cred}","Content-Type":"application/x-www-form-urlencoded"},
+            data={"grant_type":"client_credentials","scope":"pos.products:read pos.products:write"})
+        if r.status_code == 200:
+            d = r.json()
+            t = d.get("access_token")
+            st.session_state[ck] = {"at": t, "ea": time.time() + d.get("expires_in", 3600) - 60}
+            return t
+    except Exception:
+        pass
+    return None
 
 # ============================================================
 # フィールド定義
@@ -131,10 +118,10 @@ def get_visible():
     core = [k for k, d in FIELD_DEFS.items() if d["core"]]
     return core + [k for k in extra if k in FIELD_DEFS and not FIELD_DEFS[k]["core"]]
 
-def _cat_options():
+def _cat_options(token):
     if "cat_options_cache" in st.session_state:
         return st.session_state["cat_options_cache"]
-    cats = get_categories(st.session_state.get("access_token"))
+    cats = get_categories(token)
     opts = [""] + [f"{safe_str(c.get('categoryId',''))}:{safe_str(c.get('categoryName',''))}" for c in cats]
     st.session_state["cat_options_cache"] = opts
     return opts
@@ -162,8 +149,6 @@ def inject_css():
     .r-ok   { background: #ecfdf5; color: #065f46; border-left: 4px solid #10b981; }
     .r-warn { background: #fffbeb; color: #b45309; border-left: 4px solid #f59e0b; }
     .r-err  { background: #fef2f2; color: #991b1b; border-left: 4px solid #ef4444; }
-    .login-btn { display:inline-block; background:#2563eb; color:white !important; padding:12px 24px; text-decoration:none; border-radius:6px; font-weight:bold; font-size: 1rem; text-align:center; transition: all 0.2s;}
-    .login-btn:hover { background:#1d4ed8; box-shadow: 0 4px 6px rgba(37,99,235,0.3); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -173,7 +158,7 @@ def sr(kind, name, msg):
     st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
-# API: GCS画像登録 (画像・アイコン)
+# API: GCS画像登録 (画像・アイコン同時設定)
 # ============================================================
 def get_gcp_credentials():
     gcp_json_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
@@ -276,9 +261,9 @@ def get_products(token):
 # ============================================================
 # データ比較・ペイロード生成
 # ============================================================
-def prod_row(p, visible):
+def prod_row(p, token, visible):
     row = {}
-    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(st.session_state["access_token"])}
+    cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
     for k in visible:
         d = FIELD_DEFS[k]; v = p.get(d["api"], d["default"])
         if d["type"] == "select": v = api2sel(safe_str(v), d.get("options",[]))
@@ -324,53 +309,32 @@ def get_original_row(original_df, pid):
     return None
 
 # ============================================================
-# ページ: ログイン
-# ============================================================
-def page_login():
-    inject_css()
-    st.markdown('<div class="main-header">🔐 スマレジ ログイン</div>', unsafe_allow_html=True)
-    
-    if "access_token" in st.session_state:
-        st.success(f"✅ ログイン済みです (契約ID: {st.session_state.get('contract_id')})")
-        if st.button("ログアウト", type="secondary"):
-            st.session_state.clear()
-            st.rerun()
-        return
-
-    st.info("このアプリを利用するには、スマレジのアカウントでログインしてください。")
-    use_sb = st.toggle("サンドボックス環境（テスト用）でログインする", value=True)
-    cid_input = st.text_input("ご利用の 契約ID を入力してください", placeholder="例: sb_yourid123")
-
-    if cid_input:
-        client_id = st.secrets["CLIENT_ID"]
-        redirect_uri = st.secrets["REDIRECT_URI"]
-        
-        base = "https://id.smaregi.dev" if use_sb else "https://id.smaregi.jp"
-        state = f"{cid_input}::{'dev' if use_sb else 'jp'}"
-        scope = urllib.parse.quote("pos.products:read pos.products:write")
-        auth_url = f"{base}/authorize?response_type=code&client_id={client_id}&scope={scope}&state={state}&redirect_uri={urllib.parse.quote(redirect_uri)}"
-
-        st.write("##")
-        # 🌟 修正ポイント： target="_blank" を使い、別タブでスマレジ画面を開くようにしました！
-        st.markdown(f'<a href="{auth_url}" target="_blank" rel="noopener noreferrer" class="login-btn">スマレジでログインして開始（別タブで開きます）</a>', unsafe_allow_html=True)
-    else:
-        st.warning("契約IDを入力すると、ログインボタンが表示されます。")
-
-# ============================================================
 # ページ: 商品マスター
 # ============================================================
 def page_main():
-    if "access_token" not in st.session_state:
-        st.warning("左のメニューから「ログイン」を行ってください。")
+    inject_css()
+    token = get_token()
+    if not token:
+        st.error("スマレジとの認証に失敗しました。Streamlit CloudのSecrets設定（ID・シークレット）を確認してください。")
         st.stop()
 
-    inject_css()
+    # 🌟 画面左側のサイドバーで、いつでも表示項目をポチポチ切り替えられます！
+    st.sidebar.markdown("### 👁️ 表示項目の追加")
+    st.sidebar.caption("表に表示したい項目を選んでください。")
+    optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
+    cur_vis  = st.session_state.get("visible_fields", [])
+    sel_vis  = st.sidebar.multiselect("", options=optional, default=[c for c in cur_vis if c in optional], label_visibility="collapsed")
+    if sel_vis != cur_vis:
+        st.session_state["visible_fields"] = sel_vis
+        st.rerun()
+
     st.markdown('<div class="main-header">📦 商品マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    token = st.session_state["access_token"]
+    st.info("💡 **【使い方】** URLを開くだけで最新のデータが表示されます。表を直接編集して「保存する」ボタンを押せば、スマレジに即座に反映されます。")
+
     visible = get_visible()
     prods = get_products(token)
     
-    original_rows = [prod_row(p, visible) for p in prods]
+    original_rows = [prod_row(p, token, visible) for p in prods]
     original_df = pd.DataFrame(original_rows)
     display_cols = ["productId"] + visible + ["画像セット"]
     
@@ -389,7 +353,7 @@ def page_main():
         if st.button("🔄 最新データに更新", use_container_width=True):
             st.cache_data.clear(); _refresh_cat_options(); st.rerun()
 
-    cat_opts = _cat_options()
+    cat_opts = _cat_options(token)
     ccfg = {}
     for k in visible:
         d = FIELD_DEFS[k]
@@ -451,13 +415,13 @@ def page_main():
 # ページ: 部門マスター
 # ============================================================
 def page_categories():
-    if "access_token" not in st.session_state:
-        st.warning("左のメニューから「ログイン」を行ってください。")
+    inject_css()
+    token = get_token()
+    if not token:
+        st.error("スマレジとの認証に失敗しました。")
         st.stop()
 
-    inject_css()
     st.markdown('<div class="main-header">📁 部門マスター (Spreadsheet)</div>', unsafe_allow_html=True)
-    token = st.session_state["access_token"]
     cats = get_categories(token)
     cat_df = pd.DataFrame([{
         "部門ID": safe_str(c.get("categoryId","")), "部門名": safe_str(c.get("categoryName","")), "表示順": safe_int(c.get("displaySequence"), 0),
@@ -497,33 +461,10 @@ def page_categories():
             for k, n, m in results: sr(k, n, m)
 
 # ============================================================
-# ページ: 表示設定
-# ============================================================
-def page_display_settings():
-    if "access_token" not in st.session_state:
-        st.warning("左のメニューから「ログイン」を行ってください。")
-        st.stop()
-
-    inject_css()
-    st.markdown('<div class="main-header">👁️ 表示設定</div>', unsafe_allow_html=True)
-    st.markdown("#### スプレッドシートの表示項目追加")
-    optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
-    cur_vis  = st.session_state.get("visible_fields", [])
-    sel_vis  = st.multiselect("表に表示したい項目を選んでください", options=optional, default=[c for c in cur_vis if c in optional])
-    
-    st.write("##")
-    if st.button("設定を保存", type="primary"):
-        st.session_state["visible_fields"] = sel_vis
-        st.cache_data.clear()
-        st.success("表示項目を更新しました！左のメニューから「商品マスター」に戻ってください。")
-
-# ============================================================
 # ナビゲーション
 # ============================================================
 nav = st.navigation([
-    st.Page(page_login,            title="ログイン",     icon="🔐"),
-    st.Page(page_main,             title="商品マスター", icon="📦"),
-    st.Page(page_categories,       title="部門マスター", icon="📁"),
-    st.Page(page_display_settings, title="表示設定",     icon="👁️"),
+    st.Page(page_main,       title="商品マスター", icon="📦"),
+    st.Page(page_categories, title="部門マスター", icon="📁"),
 ])
 nav.run()
