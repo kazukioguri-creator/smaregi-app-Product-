@@ -348,7 +348,7 @@ def page_login():
         auth_url = f"{base}/authorize?response_type=code&client_id={client_id}&scope={scope}&state={state}&redirect_uri={urllib.parse.quote(redirect_uri)}"
 
         st.write("##")
-        st.markdown(f'<a href="{auth_url}" target="_self" class="login-btn">スマレジでログインして開始</a>', unsafe_allow_html=True)
+        st.markdown(f'<a href="{auth_url}" target="_top" class="login-btn">スマレジでログインして開始</a>', unsafe_allow_html=True)
     else:
         st.warning("契約IDを入力すると、ログインボタンが表示されます。")
 
