@@ -3,11 +3,14 @@ import requests
 import json
 import time
 import base64
+import datetime
 import pandas as pd
 from collections import OrderedDict
 from io import BytesIO
 from PIL import Image
 from pathlib import Path
+from google.oauth2 import service_account
+from google.cloud import storage
 
 # ============================================================
 # 定数
@@ -415,15 +418,21 @@ def get_token():
     return None
 
 # ============================================================
-# API: 画像登録 (🌟外部URLを経由するPUT通信へ修正)
+# API: 画像登録 (🌟Google Cloud Storage 署名付きURL版)
 # ============================================================
+def get_gcp_credentials():
+    gcp_json_str = st.secrets["GCP_SERVICE_ACCOUNT_JSON"]
+    gcp_dict = json.loads(gcp_json_str)
+    credentials = service_account.Credentials.from_service_account_info(gcp_dict)
+    return credentials
+
 def upload_and_link_image(token, product_id, file_obj):
     """
-    スマレジAPIは「外部公開された画像URL」を「PUT」で送信する仕様です。
-    画像を一時的にURL化し、スマレジに紐付けます。
+    Google Cloud Storage (GCS) に画像をアップロードし、
+    15分限定の署名付きURLを発行してスマレジに連携する最強・安全・確実なロジック。
     """
     try:
-        # リサイズ & JPEG 変換 (軽量化)
+        # 1. 画像の軽量化 (JPEG変換)
         img = Image.open(file_obj)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
@@ -432,28 +441,30 @@ def upload_and_link_image(token, product_id, file_obj):
         img.save(img_bytes, format="JPEG", quality=85)
         img_bytes.seek(0)
         
-        public_url = None
+        # 2. GCSへアップロード
+        bucket_name = st.secrets["GCP_BUCKET_NAME"]
+        credentials = get_gcp_credentials()
+        client = storage.Client(credentials=credentials, project=credentials.project_id)
+        bucket = client.bucket(bucket_name)
         
-        # 1. CatboxでURL化を試行
-        try:
-            res = requests.post("https://catbox.moe/user/api.php", data={'reqtype': 'fileupload'}, files={'fileToUpload': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
-            if res.status_code == 200: public_url = res.text.strip()
-        except: pass
+        # ファイル名を一意にする（ミリ秒のタイムスタンプを使用）
+        filename = f"products/{product_id}_{int(time.time() * 1000)}.jpg"
+        blob = bucket.blob(filename)
         
-        # 2. 失敗時は file.io でフォールバック
-        if not public_url:
-            img_bytes.seek(0)
-            try:
-                res = requests.post("https://file.io", files={'file': ('img.jpg', img_bytes, 'image/jpeg')}, timeout=10)
-                if res.status_code == 200: public_url = res.json().get("link")
-            except: pass
-            
-        if not public_url: return False, "画像の一時URL化に失敗しました（サーバー混雑）"
-
-        # 3. スマレジへ imageUrl を送信 (PUT)
+        # アップロード実行
+        blob.upload_from_file(img_bytes, content_type="image/jpeg")
+        
+        # 3. 15分間限定の「署名付きURL」を発行
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=datetime.timedelta(minutes=15),
+            method="GET"
+        )
+        
+        # 4. スマレジへ imageUrl を送信 (PUT)
         url = f"{get_api_base()}/products/{product_id}/image"
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        payload = {"imageUrl": public_url}
+        payload = {"imageUrl": signed_url}
 
         last_r = None
         for attempt in range(4):
@@ -461,7 +472,7 @@ def upload_and_link_image(token, product_id, file_obj):
                 r = requests.put(url, headers=headers, json=payload, timeout=30)
                 last_r = r
                 if r.status_code in (200, 201, 204):
-                    return True, "画像登録完了"
+                    return True, "画像登録完了（GCS経由）"
                 if r.status_code == 404 and attempt < 3:
                     time.sleep(2 ** attempt) # 商品の非同期作成待ち
                     continue
@@ -473,11 +484,11 @@ def upload_and_link_image(token, product_id, file_obj):
                 break
 
         if last_r is not None:
-            return False, f"画像連携失敗 (HTTP {last_r.status_code}): {last_r.text[:100]}"
-        return False, "画像連携に失敗しました（タイムアウト）"
+            return False, f"スマレジ連携失敗 (HTTP {last_r.status_code}): {last_r.text[:100]}"
+        return False, "スマレジ連携に失敗しました（タイムアウト）"
 
     except Exception as e:
-        return False, f"画像処理エラー: {e}"
+        return False, f"システムエラー: {str(e)}"
 
 # ============================================================
 # API: 部門・商品
