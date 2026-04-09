@@ -128,8 +128,23 @@ def get_visible():
     return core + [k for k in extra if k in FIELD_DEFS and not FIELD_DEFS[k]["core"]]
 
 def _cat_options():
+    """
+    カテゴリ選択肢を session_state にも保持する。
+    st.cache_data.clear() で @st.cache_data キャッシュが消えても、
+    data_editor の列設定が変わってウィジェットがリセットされるのを防ぐ。
+    """
+    # session_state に保持済みならそちらを優先（data_editor が安定する）
+    if "cat_options_cache" in st.session_state:
+        return st.session_state["cat_options_cache"]
     cats = get_categories()
-    return [""] + [f"{safe_str(c.get('categoryId',''))}:{safe_str(c.get('categoryName',''))}" for c in cats]
+    opts = [""] + [f"{safe_str(c.get('categoryId',''))}:{safe_str(c.get('categoryName',''))}" for c in cats]
+    st.session_state["cat_options_cache"] = opts
+    return opts
+
+def _refresh_cat_options():
+    """明示的にカテゴリ選択肢を再取得する（部門追加後などに呼ぶ）。"""
+    if "cat_options_cache" in st.session_state:
+        del st.session_state["cat_options_cache"]
 
 # ============================================================
 # CSS — Legacy Enterprise SaaS スタイル
@@ -448,31 +463,29 @@ def get_token():
 # ============================================================
 def upload_and_link_image(token, product_id, file_obj):
     """
-    スマレジ POS API の商品画像エンドポイントへ直接 multipart/form-data で送信する。
-    外部ホスティング (Catbox 等) は使用しない。
+    スマレジ POS API の商品画像エンドポイントへ Base64 JSON で送信する。
+    スマレジ API は multipart/form-data を受け付けず JSON のみ受け付けるため。
     """
     try:
-        # リサイズ & JPEG変換
+        # リサイズ & JPEG 変換
         img = Image.open(file_obj)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         img.thumbnail((1024, 1024), Image.LANCZOS)
         img_bytes = BytesIO()
         img.save(img_bytes, format="JPEG", quality=85)
-        img_bytes.seek(0)
+        img_b64 = base64.b64encode(img_bytes.getvalue()).decode("utf-8")
 
-        url = f"{get_api_base()}/products/{product_id}/image"
-        headers = {"Authorization": f"Bearer {token}"}
+        url     = f"{get_api_base()}/products/{product_id}/image"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        # スマレジ API は "imageData" フィールドに純粋な base64 文字列を期待する
+        payload = {"imageData": img_b64}
 
         last_r = None
         for attempt in range(4):
-            img_bytes.seek(0)
-            # スマレジは "imageFile" フィールドで受け付ける
-            files = {"imageFile": ("image.jpg", img_bytes, "image/jpeg")}
             try:
-                r = requests.post(url, headers=headers, files=files, timeout=20)
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
             except requests.exceptions.RequestException as e:
-                last_r = None
                 if attempt < 3:
                     time.sleep(2 ** attempt)
                     continue
@@ -480,20 +493,18 @@ def upload_and_link_image(token, product_id, file_obj):
 
             last_r = r
 
-            # 成功
             if r.status_code in (200, 201, 204):
                 return True, "画像登録完了"
 
-            # 商品がまだ生成中 (非同期) → 少し待ってリトライ
+            # 商品の非同期生成待ち
             if r.status_code == 404 and attempt < 3:
                 time.sleep(2 ** attempt)
                 continue
 
-            # その他エラー → リトライ不要
             break
 
         if last_r is not None:
-            return False, f"画像登録失敗 (HTTP {last_r.status_code}): {last_r.text[:200]}"
+            return False, f"画像登録失敗 (HTTP {last_r.status_code}): {last_r.text[:300]}"
         return False, "画像登録失敗 (レスポンスなし)"
 
     except Exception as e:
@@ -679,7 +690,8 @@ def add_form_dialog():
                     else: st.warning(f"商品登録OK (ID: {pid}) — 画像: {msg}")
                 else:
                     st.success(f"登録完了 (ID: {pid})")
-                st.cache_data.clear(); time.sleep(1); st.rerun()
+                get_products.clear()
+                time.sleep(1); st.rerun()
             else:
                 st.error(f"登録失敗 (HTTP {r.status_code}): {r.text}")
 
@@ -779,7 +791,8 @@ def page_main():
                                 results.append(("ok", name, f"登録完了 (ID:{pid})"))
                         else:
                             results.append(("err", name, f"登録失敗 (HTTP {r.status_code}): {r.text[:120]}"))
-                    st.cache_data.clear()
+                    # 商品キャッシュのみクリア（カテゴリは維持 → data_editor がリセットされない）
+                    get_products.clear()
                 if results:
                     ok_cnt  = sum(1 for k,_,_ in results if k=="ok")
                     err_cnt = sum(1 for k,_,_ in results if k=="err")
@@ -802,7 +815,9 @@ def page_main():
             if st.button("項目設定", key="fs2"): field_settings_dialog()
         with tc2:
             if st.button("データ再取得", key="reload_prod"):
-                st.cache_data.clear(); st.rerun()
+                st.cache_data.clear()
+                _refresh_cat_options()
+                st.rerun()
 
         prods = get_products()
         if not prods:
@@ -867,7 +882,7 @@ def page_main():
                                     else:  results.append(("warn", pn, f"更新OK / 画像: {msg}"))
                                 elif hc:
                                     results.append(("ok", pn, "更新完了"))
-                            st.cache_data.clear()
+                            get_products.clear()
                         if results:
                             for k,n,m in results: sr(k,n,m)
                 with cd:
@@ -891,7 +906,7 @@ def page_main():
                             else:
                                 ifile.seek(0)
                                 ok, msg = upload_and_link_image(token, spid, ifile)
-                                st.cache_data.clear()
+                                get_products.clear()
                                 if ok: st.success(msg)
                                 else:  st.error(msg)
                 st.markdown("---")
@@ -912,7 +927,7 @@ def page_main():
                                         headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=dp)
                                     if r.status_code in (200,204): results.append(("ok", pn, "更新完了"))
                                     else: results.append(("err", pn, f"更新失敗 (HTTP {r.status_code}): {r.text[:120]}"))
-                    st.cache_data.clear()
+                    get_products.clear()
                     if results:
                         for k,n,m in results: sr(k,n,m)
 
@@ -952,7 +967,8 @@ def page_main():
                             rv = requests.post(f"{get_api_base()}/categories",
                                 headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"},
                                 json={"categoryName": new_cn.strip(), "displaySequence": str(safe_int(new_cs))})
-                            st.cache_data.clear()
+                            get_categories.clear()
+                            _refresh_cat_options()
                     if rv and rv.status_code in (200,201):
                         st.success(f"部門「{new_cn}」を追加しました"); time.sleep(.5); st.rerun()
                     elif rv: st.error(f"追加失敗 (HTTP {rv.status_code}): {rv.text}")
@@ -978,7 +994,8 @@ def page_main():
                                         headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=ch)
                                     if r.status_code in (200,204): results.append(("ok", safe_str(row.get("部門名","")), "更新完了"))
                                     else: results.append(("err", safe_str(row.get("部門名","")), "更新失敗: " + r.text[:100]))
-                    st.cache_data.clear()
+                    get_categories.clear()
+                    _refresh_cat_options()
                 if results:
                     for k,n,m in results: sr(k,n,m)
 
@@ -1030,7 +1047,9 @@ def page_settings():
         update_config_bulk({"contract_id":cid,"client_id":cli,"client_secret":sec,
             "use_sandbox":use_sb,"visible_fields":sel_vis})
         for k in [k for k in st.session_state if k.startswith("_tc_")]: del st.session_state[k]
+        # 設定変更時は全キャッシュリセット（接続先が変わる可能性があるため）
         st.cache_data.clear()
+        _refresh_cat_options()
         st.success("設定を保存しました。")
 
     st.markdown("---")
