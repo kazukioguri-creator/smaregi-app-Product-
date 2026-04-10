@@ -73,74 +73,79 @@ def get_token():
     return None
 
 # ============================================================
-# 🌟 特製バーコードリーダー コンポーネント (外カメ強制・高感度化)
+# 🌟 特製バーコードリーダー コンポーネント (外カメ強制・狭枠・高感度化)
 # ============================================================
 def custom_barcode_scanner(key="scanner"):
-    # プログラム内に一時的に専用のHTML/JSファイルを作り、高感度リーダーを起動します
     component_dir = os.path.abspath("barcode_component_dir")
     if not os.path.exists(component_dir):
         os.makedirs(component_dir)
-        html_code = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <script src="https://unpkg.com/html5-qrcode"></script>
-            <style>
-                body { margin: 0; padding: 0; background-color: #f8fafc; font-family: sans-serif; }
-                #reader { width: 100%; border-radius: 8px; border: 3px solid #3b82f6; overflow: hidden; background: #000; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-            </style>
-        </head>
-        <body>
-            <div id="reader"></div>
-            <script>
-                function sendToStreamlit(value) {
-                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value }, "*");
-                }
-                function setHeight(h) {
-                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
-                }
-                window.onload = function() {
-                    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
-                    setHeight(350);
-                };
+    
+    # UIズレ防止と枠狭めチューニング
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://unpkg.com/html5-qrcode"></script>
+        <style>
+            body { margin: 0; padding: 0; background-color: #ffffff; font-family: sans-serif; overflow: hidden; }
+            #reader { width: 100%; border-radius: 8px; border: 2px solid #cbd5e1; overflow: hidden; background: #000; }
+            /* カメラプレビュー内の余計な要素を隠す */
+            #reader img { object-fit: cover; }
+        </style>
+    </head>
+    <body>
+        <div id="reader"></div>
+        <script>
+            function sendToStreamlit(value) {
+                window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value }, "*");
+            }
+            function setHeight(h) {
+                window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+            }
+            window.onload = function() {
+                window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+                setHeight(300); // 縦幅を少しコンパクトに調整
+            };
 
-                let started = false;
-                window.addEventListener("message", function(event) {
-                    if (event.data.type === "streamlit:render" && !started) {
-                        started = true;
-                        const html5QrCode = new Html5Qrcode("reader");
-                        
-                        // 外カメ強制(environment) ＆ 商品バーコード専用設定
-                        const config = { 
-                            fps: 15, 
-                            qrbox: { width: 260, height: 100 }, // 1Dバーコードに合わせた横長枠
-                            formatsToSupport: [ 
-                                Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-                                Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
-                                Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39
-                            ]
-                        };
-                        
-                        html5QrCode.start({ facingMode: "environment" }, config, 
-                            (decodedText) => {
-                                sendToStreamlit(decodedText);
-                                html5QrCode.stop().then(() => {
-                                    document.getElementById("reader").innerHTML = "<h3 style='color:#10b981; text-align:center; padding:20px; background:#fff;'>✅ 読取完了!</h3>";
-                                    setHeight(80);
-                                });
-                            },
-                            (errorMessage) => {}
-                        ).catch(err => {
-                            document.getElementById("reader").innerHTML = "<p style='color:red; text-align:center; padding:20px;'>カメラが起動できません。権限を確認してください。</p>";
-                        });
-                    }
-                });
-            </script>
-        </body>
-        </html>
-        """
-        with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
-            f.write(html_code)
+            let started = false;
+            window.addEventListener("message", function(event) {
+                if (event.data.type === "streamlit:render" && !started) {
+                    started = true;
+                    const html5QrCode = new Html5Qrcode("reader");
+                    
+                    // 外カメ強制 ＆ 読取枠を細長く（高さ70）して商品バーコード特化
+                    const config = { 
+                        fps: 15, 
+                        qrbox: { width: 250, height: 70 }, // 🌟 ココを細くしました！
+                        aspectRatio: 1.5, // カメラ映像を横長にして無駄な縦スペースを削る
+                        formatsToSupport: [ 
+                            Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+                            Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+                            Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39
+                        ]
+                    };
+                    
+                    html5QrCode.start({ facingMode: "environment" }, config, 
+                        (decodedText) => {
+                            sendToStreamlit(decodedText);
+                            html5QrCode.stop().then(() => {
+                                document.getElementById("reader").innerHTML = "<h3 style='color:#10b981; text-align:center; padding:15px; margin:0; background:#f0fdf4;'>✅ 読取完了!</h3>";
+                                setHeight(60);
+                            });
+                        },
+                        (errorMessage) => {}
+                    ).catch(err => {
+                        document.getElementById("reader").innerHTML = "<p style='color:red; text-align:center; padding:15px; margin:0;'>カメラが起動できません。ブラウザのカメラ権限を確認してください。</p>";
+                        setHeight(80);
+                    });
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+    with open(os.path.join(component_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(html_code)
     
     _scanner = components.declare_component("custom_barcode_scanner", path=component_dir)
     return _scanner(key=key)
@@ -194,33 +199,41 @@ def _refresh_cat_options():
         del st.session_state["cat_options_cache"]
 
 # ============================================================
-# CSS
+# CSS (📱スマホネイティブアプリ風・余白ズレ解消)
 # ============================================================
 def inject_css():
     st.markdown("""
     <style>
     * { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; }
     input, select, textarea, .stSelectbox div { font-size: 16px !important; }
-    .stApp { background: #f1f5f9; }
-    .block-container { padding-top: 1rem !important; padding-bottom: 5rem !important; max-width: 600px !important; margin: 0 auto;}
-    .step-card { background: #ffffff; padding: 1.5rem; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); margin-bottom: 1.2rem; border: 1px solid #e2e8f0; }
-    .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1rem; }
-    .step-number { background: #2563eb; color: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
-    .step-title { color: #0f172a; font-size: 1.2rem; font-weight: 800; }
-    .stButton > button { border-radius: 12px !important; font-weight: 700 !important; padding: 0.75rem 1rem !important; font-size: 1.05rem !important; width: 100%; transition: transform 0.1s; }
+    .stApp { background: #f8fafc; }
+    /* 余白を極限まで減らしてスマホ画面にフィットさせる */
+    .block-container { padding: 1rem 0.5rem 4rem 0.5rem !important; max-width: 600px !important; margin: 0 auto;}
+    
+    .step-card { background: #ffffff; padding: 1.2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); margin-bottom: 1rem; border: 1px solid #e2e8f0; }
+    .step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 0.8rem; }
+    .step-number { background: #3b82f6; color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; }
+    .step-title { color: #0f172a; font-size: 1.1rem; font-weight: 700; }
+    
+    /* ボタンの調整 (高さと角丸をスマホに最適化) */
+    .stButton > button { border-radius: 8px !important; font-weight: 600 !important; padding: 0.6rem 0.5rem !important; font-size: 1rem !important; width: 100%; transition: transform 0.1s; }
     .stButton > button:active { transform: scale(0.97); }
-    .stButton > button[kind="primary"] { background: #2563eb !important; color: white !important; border: none !important; box-shadow: 0 4px 6px rgba(37,99,235,0.25); }
-    .stButton > button[kind="primary"]:hover { background: #1d4ed8 !important; }
-    .r-row { padding: 1rem; border-radius: 12px; margin: .5rem 0; font-size: 1.05rem; font-weight: bold; display: flex; align-items: center; gap: .5rem; }
-    .r-ok   { background: #dcfce7; color: #166534; border-left: 6px solid #22c55e; }
-    .r-err  { background: #fee2e2; color: #991b1b; border-left: 6px solid #ef4444; }
+    .stButton > button[kind="primary"] { background: #3b82f6 !important; color: white !important; border: none !important; box-shadow: 0 2px 4px rgba(59,130,246,0.2); }
+    .stButton > button[kind="primary"]:hover { background: #2563eb !important; }
+    
+    .r-row { padding: 0.8rem; border-radius: 8px; margin: 0.4rem 0; font-size: 0.95rem; font-weight: bold; display: flex; align-items: center; gap: 0.4rem; }
+    .r-ok   { background: #ecfdf5; color: #166534; border-left: 5px solid #22c55e; }
+    .r-err  { background: #fef2f2; color: #991b1b; border-left: 5px solid #ef4444; }
+    
+    /* 余計なStreamlitの余白を消す */
+    div[data-testid="stVerticalBlock"] > div { padding-bottom: 0 !important; }
     </style>
     """, unsafe_allow_html=True)
 
 def sr(kind, name, msg):
     cls  = {"ok":"r-ok","err":"r-err"}.get(kind,"r-ok")
     icon = {"ok":"✅","err":"❌"}.get(kind,"●")
-    st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 6px;">|</span>{msg}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong><span style="opacity:.5; margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
 
 # ============================================================
 # API: GCS画像登録
@@ -336,7 +349,7 @@ def page_scanner_form():
         st.error("スマレジとの認証に失敗しました。")
         st.stop()
 
-    st.markdown('<div style="text-align:center; padding-bottom:1rem;"><h2 style="margin:0; color:#0f172a;">📱 現場登録ツール</h2><p style="color:#64748b; font-size:14px;">現場での商品追加・写真登録を行います</p></div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center; padding-bottom:0.5rem;"><h3 style="margin:0; color:#0f172a;">📱 現場登録ツール</h3></div>', unsafe_allow_html=True)
 
     if "input_mode" not in st.session_state:
         st.session_state.input_mode = None
@@ -353,14 +366,13 @@ def page_scanner_form():
         <div class="step-card">
             <div class="step-header">
                 <div class="step-number">1</div>
-                <div class="step-title">商品コードをどうしますか？</div>
+                <div class="step-title">商品コード入力</div>
             </div>
-        </div>
     """, unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📸 スキャナ起動", type="primary" if st.session_state.input_mode == "scan" else "secondary"):
+        if st.button("📸 スキャン", type="primary" if st.session_state.input_mode == "scan" else "secondary"):
             st.session_state.input_mode = "scan"
             st.session_state.final_code = ""
             st.rerun()
@@ -373,12 +385,11 @@ def page_scanner_form():
     code_input = ""
 
     if st.session_state.input_mode == "scan":
-        st.info("💡 商品のバーコードを枠内に収めてください（外カメが強制起動します）")
+        st.caption("商品のバーコードを赤い枠線に合わせてください。")
         
-        # 🌟 ここで先ほどの自作高感度コンポーネントを呼び出します
+        # 🌟 最適化された自作コンポーネントを呼び出し
         scanned_result = custom_barcode_scanner(key="live_barcode_scanner")
         
-        # 読み取りが成功すると、Python側の変数に自動で値が入ります
         if scanned_result:
             st.session_state.input_mode = "scanned_success"
             st.session_state.final_code = scanned_result
@@ -386,11 +397,13 @@ def page_scanner_form():
 
     elif st.session_state.input_mode == "auto":
         code_input = st.session_state.final_code
-        st.success(f"✅ システムが自動で番号を割り当てました: **{code_input}**")
+        st.success(f"✅ 自動採番: **{code_input}**")
         
     elif st.session_state.input_mode == "scanned_success":
         code_input = st.session_state.final_code
-        st.success(f"✅ 読み取り成功: **{code_input}**")
+        st.success(f"✅ 読取成功: **{code_input}**")
+
+    st.markdown("</div>", unsafe_allow_html=True) # close step-card
 
     # ---------------------------------------------------------
     # STEP 2 & 3: 情報入力と写真撮影
@@ -400,19 +413,18 @@ def page_scanner_form():
         is_new = target_prod is None
 
         st.markdown("""
-            <div class="step-card" style="margin-top:20px;">
+            <div class="step-card">
                 <div class="step-header">
                     <div class="step-number">2</div>
-                    <div class="step-title">商品情報を入力</div>
+                    <div class="step-title">商品情報</div>
                 </div>
-            </div>
         """, unsafe_allow_html=True)
 
         if is_new:
             st.caption("✨ 新規商品の登録です")
             default_data = {k: d["default"] for k, d in FIELD_DEFS.items()}
         else:
-            st.warning(f"🔄 既存の商品が見つかりました。「{target_prod.get('productName')}」を上書き更新します。")
+            st.warning(f"🔄 既存の商品「{target_prod.get('productName')}」を更新します。")
             default_data = {}
             for k, d in FIELD_DEFS.items():
                 val = target_prod.get(d["api"], d["default"])
@@ -440,19 +452,21 @@ def page_scanner_form():
                     form_vals[k] = st.number_input(k, value=int(default_data[k]), step=1)
                 else:
                     form_vals[k] = st.text_input(k, value=default_data[k])
+                    
+        st.markdown("</div>", unsafe_allow_html=True) # close step-card
 
         # 写真設定
         st.markdown("""
-            <div class="step-card" style="margin-top:20px;">
+            <div class="step-card">
                 <div class="step-header">
                     <div class="step-number">3</div>
-                    <div class="step-title">商品の写真を設定 (任意)</div>
+                    <div class="step-title">写真設定 (任意)</div>
                 </div>
-            </div>
         """, unsafe_allow_html=True)
 
-        st.info("👇 枠をタップすると、スマホの「カメラを起動」が選べます")
+        st.caption("👇 枠をタップして「カメラ」を起動")
         img_file = st.file_uploader("写真を撮影、または選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
+        st.markdown("</div>", unsafe_allow_html=True) # close step-card
 
         st.write("##")
         submit_btn = st.button("🚀 この内容でスマレジに登録する", type="primary")
@@ -494,7 +508,7 @@ def page_scanner_form():
                 st.rerun()
 
 # ============================================================
-# ページ 2: 💻 商品一括管理 (PC作業用スプレッドシート)
+# ページ 2: 💻 商品一括管理
 # ============================================================
 def page_spreadsheet():
     inject_css()
