@@ -77,11 +77,6 @@ def get_token():
 
 # ============================================================
 # バーコードリーダー
-#
-# 連続スキャン対応の要点:
-#   1. 読取成功 → uid付きJSONを送信 → 即座にnullで上書き (古い値の残留を防止)
-#   2. 1.2秒後に自動resume (カメラストリームは維持)
-#   3. Python側は uid の一致で重複を弾く
 # ============================================================
 def build_scanner_component():
     html_code = r"""<!DOCTYPE html>
@@ -103,7 +98,7 @@ body,html{background:transparent;overflow:hidden;
 .scan-overlay{position:absolute;inset:0;z-index:5;pointer-events:none;
     display:flex;align-items:center;justify-content:center}
 .scan-frame{width:280px;height:90px;border:2.5px solid rgba(255,255,255,.85);
-    border-radius:12px;box-shadow:0 0 0 4000px rgba(0,0,0,.45);transition:border-color .2s,box-shadow .2s}
+    border-radius:12px;box-shadow:0 0 0 4000px rgba(0,0,0,.45);transition:all .2s}
 .scan-frame.hit{border-color:#22c55e;box-shadow:0 0 0 4000px rgba(0,0,0,.45),0 0 24px rgba(34,197,94,.6)}
 .scan-hint{position:absolute;bottom:16px;left:0;right:0;text-align:center;
     color:rgba(255,255,255,.7);font-size:12px;font-weight:600}
@@ -132,14 +127,14 @@ body,html{background:transparent;overflow:hidden;
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="mainWrap">
     <div class="loading" id="loading"><div class="spinner"></div><span>カメラ起動中...</span></div>
     <div class="flash" id="flash"></div>
     <div class="done-banner" id="doneBanner">
         <div style="font-size:44px">✅</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">読み取り完了</div>
         <div class="done-code" id="doneCode"></div>
-        <div class="done-sub">次のバーコードをかざしてください</div>
+        <div class="done-sub">送信中...</div>
     </div>
     <div class="cam-error" id="camError">
         <div style="font-size:32px;margin-bottom:8px">📷</div>
@@ -147,7 +142,7 @@ body,html{background:transparent;overflow:hidden;
         <div style="color:#94a3b8;font-size:12px;margin-top:4px">ブラウザ設定でカメラを許可してください</div>
     </div>
     <div class="scan-overlay"><div class="scan-frame" id="scanFrame"></div>
-        <div class="scan-hint" id="scanHint">バーコードを枠に合わせてください</div></div>
+        <div class="scan-hint">バーコードを枠に合わせてください</div></div>
     <div id="reader"></div>
 </div>
 <script>
@@ -160,84 +155,98 @@ function beep(){try{const c=new(window.AudioContext||window.webkitAudioContext)(
 function vibrate(){try{navigator.vibrate&&navigator.vibrate([60,30,60])}catch(e){}}
 
 const $=id=>document.getElementById(id);
-let scanner=null, cameraReady=false, scanActive=false, lastCmdSeq=-1;
-let autoResumeTimer=null;
+let scanner=null;
+let camState="none"; /* none | starting | ready | error */
+let decoding=false;  /* resume済みでデコード受付中か */
 
 function showBanner(code){$("doneCode").textContent=code;$("doneBanner").classList.add("show")}
 function hideBanner(){$("doneBanner").classList.remove("show")}
 function doFlash(){const e=$("flash");e.classList.add("on");setTimeout(()=>e.classList.remove("on"),250)}
 function doFrameHit(){const f=$("scanFrame");f.classList.add("hit");setTimeout(()=>f.classList.remove("hit"),800)}
 
-function initCamera(){
-    if(scanner) return Promise.resolve();
-    scanner=new Html5Qrcode("reader");
-    return scanner.start(
-        {facingMode:"environment"},
-        {fps:15,qrbox:{width:9999,height:9999},aspectRatio:1.333,
-         formatsToSupport:[
-            Html5QrcodeSupportedFormats.EAN_13,Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.UPC_A,Html5QrcodeSupportedFormats.UPC_E,
-            Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39,
-            Html5QrcodeSupportedFormats.QR_CODE]},
-        (text)=>{
-            if(!scanActive) return;
-            scanActive=false;
-            beep();vibrate();doFlash();doFrameHit();
-            showBanner(text);
-            try{scanner.pause(true)}catch(e){}
-
-            /* ★ uid付きで送信し、50ms後にnullで上書き → rerunで古い値が返らない */
-            const uid=Date.now()+"_"+Math.random().toString(36).slice(2,8);
-            ST.send(JSON.stringify({code:text,uid:uid}));
-            setTimeout(()=>{ ST.send(null) }, 50);
-
-            /* 1.2秒後に自動resume */
-            if(autoResumeTimer) clearTimeout(autoResumeTimer);
-            autoResumeTimer=setTimeout(()=>{
-                hideBanner();
-                try{scanner.resume()}catch(e){}
-                scanActive=true;
-            },1200);
-        },
-        ()=>{}
-    ).then(()=>{
-        cameraReady=true;
-        $("loading").classList.add("hidden");
-        scanActive=true;
-    }).catch(()=>{
-        $("loading").classList.add("hidden");
-        $("camError").classList.add("show");
+function ensureCamera(){
+    return new Promise((resolve,reject)=>{
+        if(camState==="ready"){resolve();return}
+        if(camState==="starting"){
+            /* 起動中なら待つ */
+            const iv=setInterval(()=>{
+                if(camState==="ready"){clearInterval(iv);resolve()}
+                if(camState==="error"){clearInterval(iv);reject()}
+            },100);
+            return;
+        }
+        camState="starting";
+        $("loading").classList.remove("hidden");
+        scanner=new Html5Qrcode("reader");
+        scanner.start(
+            {facingMode:"environment"},
+            {fps:15,qrbox:{width:9999,height:9999},aspectRatio:1.333,
+             formatsToSupport:[
+                Html5QrcodeSupportedFormats.EAN_13,Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.UPC_A,Html5QrcodeSupportedFormats.UPC_E,
+                Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39,
+                Html5QrcodeSupportedFormats.QR_CODE]},
+            onDecode,()=>{}
+        ).then(()=>{
+            camState="ready"; decoding=true;
+            $("loading").classList.add("hidden");
+            resolve();
+        }).catch(()=>{
+            camState="error";
+            $("loading").classList.add("hidden");
+            $("camError").classList.add("show");
+            reject();
+        });
     });
 }
 
-function handleCommand(cmd,seq){
-    if(seq<=lastCmdSeq) return;
-    lastCmdSeq=seq;
-    if(cmd==="start"){
-        hideBanner();
-        if(autoResumeTimer){clearTimeout(autoResumeTimer);autoResumeTimer=null}
-        if(!cameraReady){
-            $("loading").classList.remove("hidden");
-            initCamera();
-        }else{
-            try{scanner.resume()}catch(e){}
-            scanActive=true;
-        }
-        ST.height(280);
-    }else if(cmd==="hide"){
-        if(autoResumeTimer){clearTimeout(autoResumeTimer);autoResumeTimer=null}
-        hideBanner();
-        if(cameraReady&&scanActive){try{scanner.pause(true)}catch(e){}}
-        scanActive=false;
-        ST.height(0);
-    }
+function onDecode(text){
+    if(!decoding) return;
+    decoding=false;
+    beep();vibrate();doFlash();doFrameHit();
+    showBanner(text);
+    try{scanner.pause(true)}catch(e){}
+
+    const uid=Date.now()+"_"+Math.random().toString(36).slice(2,8);
+    ST.send(JSON.stringify({code:text,uid:uid}));
+    /* ★ 100ms後にnullで上書き → rerunで古い値を返さない */
+    setTimeout(()=>{ ST.send(null) },100);
 }
 
+function doStart(){
+    hideBanner();
+    $("mainWrap").style.display="";
+    ST.height(280);
+    ensureCamera().then(()=>{
+        /* pause中なら resume、既に動いてればそのまま */
+        try{scanner.resume()}catch(e){}
+        decoding=true;
+    }).catch(()=>{});
+}
+
+function doHide(){
+    hideBanner();
+    if(camState==="ready"){
+        try{scanner.pause(true)}catch(e){}
+        decoding=false;
+    }
+    $("mainWrap").style.display="none";
+    ST.height(0);
+}
+
+/* ---- Streamlit通信 ---- */
+let currentCommand="";
 window.onload=function(){ST.ready();ST.height(0)};
+
 window.addEventListener("message",function(ev){
     if(!ev.data||ev.data.type!=="streamlit:render") return;
     const a=ev.data.args||{};
-    if(a.command) handleCommand(a.command, a.seq||0);
+    const cmd=a.command||"hide";
+    /* コマンドが変わったときだけ実行 */
+    if(cmd===currentCommand) return;
+    currentCommand=cmd;
+    if(cmd==="start") doStart();
+    else doHide();
 });
 </script>
 </body>
@@ -250,13 +259,15 @@ window.addEventListener("message",function(ev){
 
 _scanner_func = build_scanner_component()
 
+
 def render_scanner(command="hide"):
-    if "scanner_cmd_seq" not in st.session_state:
-        st.session_state.scanner_cmd_seq = 0
-    st.session_state.scanner_cmd_seq += 1
+    """
+    command が変わったときだけ JS に伝わるよう、
+    phase をそのまま文字列で渡す。
+    JS側は前回と異なる command のときだけ実行する。
+    """
     raw = _scanner_func(
         command=command,
-        seq=st.session_state.scanner_cmd_seq,
         key="__persistent_scanner__",
         default=None,
     )
@@ -267,10 +278,11 @@ def render_scanner(command="hide"):
         code = parsed.get("code", "")
         uid  = parsed.get("uid", "")
     except (json.JSONDecodeError, TypeError):
-        return None  # null や不正な値は無視
+        return None
     if not uid:
         return None
-    if uid == st.session_state.get("_last_scan_uid"):
+    prev = st.session_state.get("_last_scan_uid", "")
+    if uid == prev:
         return None
     st.session_state["_last_scan_uid"] = uid
     return code if code else None
@@ -323,13 +335,12 @@ def _cat_options(token):
 def _refresh_cat_options():
     st.session_state.pop("cat_options_cache", None)
 
-
 # ============================================================
 # CSS
 # ============================================================
 def inject_css():
     st.markdown("""<style>
-:root{--brand:#2563eb;--brand-light:#dbeafe;--success:#16a34a;
+:root{--brand:#2563eb;--brand-light:#dbeafe;
     --surface:#fff;--bg:#f8fafc;--text1:#0f172a;--text2:#64748b;--border:#e2e8f0;--radius:14px}
 *{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
 input,select,textarea,.stSelectbox div,
@@ -368,7 +379,6 @@ def sr(kind, name, msg):
     icon = {"ok":"✅","err":"❌"}.get(kind,"●")
     st.markdown(f'<div class="r-row {cls}"><span>{icon}</span><strong>{name}</strong>'
                 f'<span style="opacity:.4;margin:0 4px;">|</span>{msg}</div>', unsafe_allow_html=True)
-
 
 # ============================================================
 # GCS 画像
@@ -410,7 +420,6 @@ def upload_and_link_image(token, product_id, file_obj):
         return (ok_img and ok_icon), "画像登録完了" if ok_img and ok_icon else "画像一部失敗"
     except Exception as e:
         return False, str(e)
-
 
 # ============================================================
 # API
@@ -458,9 +467,8 @@ def create_payload(form_data, code):
         payload[d["api"]] = safe_str(v)
     return payload
 
-
 # ============================================================
-# ページ 1: スキャン＆登録 (連続登録)
+# ページ 1: スキャン＆登録
 # ============================================================
 def _init_state():
     for k, v in {
@@ -468,9 +476,9 @@ def _init_state():
         "final_code": "",
         "code_source": None,
         "register_history": [],
-        # ★ 登録直後に追加したコードを「既知」として記録し、
-        #   次の get_products で返ってきても新規扱いにしない
-        "just_registered_codes": set(),
+        "_last_scan_uid": "",
+        # ★ phase が実際に切り替わったことを JS に伝えるためのトグル
+        "_scanner_toggle": False,
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -494,14 +502,49 @@ def page_scanner_form():
     cat_opts = _cat_options(token)
     phase = st.session_state.scan_phase
 
-    # ======== カメラ (常時マウント・コマンド切替のみ) ========
-    scanner_cmd = "start" if phase == "scanning" else "hide"
-    scanned_value = render_scanner(command=scanner_cmd)
+    # ============================================================
+    # カメラ (常時マウント)
+    #
+    # ★ 問題の核心:
+    #   Streamlit は rerun のたびにコンポーネントに args を送る。
+    #   command="start" が同じ文字列で送られ続けると、
+    #   JS 側は「同じコマンドだから無視」してしまい、
+    #   登録後に scanning に戻っても doStart() が呼ばれない。
+    #
+    # ★ 解決:
+    #   toggle フラグを付けて、phase 遷移のたびに値を反転させる。
+    #   JS 側は command+toggle の組み合わせで変化を検知する。
+    # ============================================================
+    if phase == "scanning":
+        scanner_cmd = "start"
+    else:
+        scanner_cmd = "hide"
 
-    # ★ scanning フェーズのときだけ、新しいスキャン値を受け付ける
+    toggle = st.session_state._scanner_toggle
+    raw = _scanner_func(
+        command=scanner_cmd,
+        toggle=toggle,
+        key="__persistent_scanner__",
+        default=None,
+    )
+
+    # スキャン値の取得
+    scanned_value = None
+    if raw is not None:
+        try:
+            parsed = json.loads(raw)
+            code = parsed.get("code", "")
+            uid  = parsed.get("uid", "")
+        except (json.JSONDecodeError, TypeError):
+            code, uid = "", ""
+        if uid and uid != st.session_state.get("_last_scan_uid", ""):
+            st.session_state["_last_scan_uid"] = uid
+            scanned_value = code
+
     if scanned_value and phase == "scanning":
         st.session_state.final_code = scanned_value
         st.session_state.scan_phase = "scanned"
+        st.session_state._scanner_toggle = not toggle  # ★ トグル反転
         st.rerun()
 
     # ======== 登録履歴 ========
@@ -537,6 +580,8 @@ def page_scanner_form():
                 st.session_state.scan_phase = "scanning"
                 st.session_state.code_source = "scan"
                 st.session_state.final_code = ""
+                st.session_state["_last_scan_uid"] = ""
+                st.session_state._scanner_toggle = not st.session_state._scanner_toggle
                 st.rerun()
         with c2:
             if st.button("⌨️ 手入力", type="secondary", use_container_width=True):
@@ -548,6 +593,7 @@ def page_scanner_form():
                 st.session_state.final_code = generate_auto_code()
                 st.session_state.scan_phase = "scanned"
                 st.session_state.code_source = "auto"
+                st.session_state._scanner_toggle = not st.session_state._scanner_toggle
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -556,6 +602,7 @@ def page_scanner_form():
         if st.button("← 戻る", type="secondary"):
             st.session_state.scan_phase = "idle"
             st.session_state.final_code = ""
+            st.session_state._scanner_toggle = not st.session_state._scanner_toggle
             st.rerun()
 
     # ======== manual_input ========
@@ -579,17 +626,9 @@ def page_scanner_form():
     # ======== scanned → フォーム ========
     elif phase == "scanned":
         code_input = st.session_state.final_code
-
-        # ★ 今回のセッションで登録済みのコードは「既存」判定から除外
-        just_registered = st.session_state.just_registered_codes
         target_prod = find_product_by_code(prods, code_input)
-        if target_prod and code_input in just_registered:
-            # 直前に自分が登録したばかり → 既存扱いにするか確認
-            # (同じコードを意図的に再編集したい場合もあるのでそのまま既存扱い)
-            pass
         is_new = target_prod is None
 
-        # コード表示
         st.markdown(
             f'<div class="ui-card" style="padding:.85rem 1.25rem">'
             f'<div style="display:flex;align-items:center;justify-content:space-between">'
@@ -618,7 +657,6 @@ def page_scanner_form():
                     val = next((o for o in cat_opts if o.startswith(cid + ":")), "") if cid else ""
                 dd[k] = val
 
-        # フォーム
         st.markdown('<div class="ui-card"><div class="ui-card-title">商品情報</div>',
                     unsafe_allow_html=True)
         fv = {}
@@ -643,16 +681,11 @@ def page_scanner_form():
                     fv[k] = st.text_input(k, value=dv)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # 写真
+        # 写真 (アップロードのみ)
         st.markdown('<div class="ui-card"><div class="ui-card-title">写真（任意）</div>',
                     unsafe_allow_html=True)
-        pt, ut = st.tabs(["📷 撮影", "📁 ファイル選択"])
-        with pt:
-            camera_img = st.camera_input("撮影", label_visibility="collapsed")
-        with ut:
-            upload_img = st.file_uploader("選択", type=["jpg","jpeg","png"],
-                                          label_visibility="collapsed")
-        img_file = camera_img or upload_img
+        img_file = st.file_uploader("画像を選択", type=["jpg","jpeg","png"],
+                                     label_visibility="collapsed")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # ボタン
@@ -665,6 +698,7 @@ def page_scanner_form():
             if st.button("取消", type="secondary", use_container_width=True):
                 st.session_state.scan_phase = "idle"
                 st.session_state.final_code = ""
+                st.session_state._scanner_toggle = not st.session_state._scanner_toggle
                 st.rerun()
 
         if submit:
@@ -701,15 +735,12 @@ def page_scanner_form():
                     else:
                         detail = r.text[:80]
 
-            # ★ 登録済みコードを記録 + キャッシュクリア
-            st.session_state.just_registered_codes.add(code_input)
             st.cache_data.clear()
             _add_history(fv["商品名"], code_input, ok)
 
-            # ★ uid をリセットして、次の rerun で古いスキャンを拾わないようにする
-            st.session_state.pop("_last_scan_uid", None)
+            # ★ 次のフローへ: uid をクリア + toggle 反転で JS にコマンド変化を伝える
+            st.session_state["_last_scan_uid"] = ""
 
-            # 次のフローへ
             src = st.session_state.code_source
             if src == "auto":
                 st.session_state.final_code = generate_auto_code()
@@ -720,6 +751,8 @@ def page_scanner_form():
             else:
                 st.session_state.scan_phase = "idle"
                 st.session_state.final_code = ""
+
+            st.session_state._scanner_toggle = not st.session_state._scanner_toggle
             st.rerun()
 
 
@@ -790,7 +823,6 @@ def page_spreadsheet():
             st.cache_data.clear()
         for k,n,m in results: sr(k,n,m)
 
-
 # ============================================================
 # ページ 3: 部門マスター
 # ============================================================
@@ -831,7 +863,6 @@ def page_categories():
             st.cache_data.clear();_refresh_cat_options()
         for k,n,m in results: sr(k,n,m)
 
-
 # ============================================================
 # ページ 4: 設定
 # ============================================================
@@ -847,7 +878,6 @@ def page_settings():
         st.session_state.auto_rule_prefix=pfx; st.session_state.auto_rule_suffix=sfx
         st.success("保存しました。")
     st.markdown('</div>',unsafe_allow_html=True)
-
 
 # ============================================================
 # ナビゲーション
