@@ -71,11 +71,17 @@ def get_token():
             d = r.json(); t = d["access_token"]
             st.session_state[ck] = {"at": t, "ea": time.time() + d.get("expires_in", 3600) - 60}
             return t
-    except Exception: pass
+    except Exception:
+        pass
     return None
 
 # ============================================================
-# バーコードリーダー (常時マウント・連続スキャン対応)
+# バーコードリーダー
+#
+# 連続スキャン対応の要点:
+#   1. 読取成功 → uid付きJSONを送信 → 即座にnullで上書き (古い値の残留を防止)
+#   2. 1.2秒後に自動resume (カメラストリームは維持)
+#   3. Python側は uid の一致で重複を弾く
 # ============================================================
 def build_scanner_component():
     html_code = r"""<!DOCTYPE html>
@@ -94,7 +100,6 @@ body,html{background:transparent;overflow:hidden;
 #reader__header_message,#qr-shaded-region{display:none!important}
 #reader__scan_region{position:absolute!important;inset:0!important;
     width:100%!important;height:100%!important;min-height:0!important;overflow:hidden!important}
-
 .scan-overlay{position:absolute;inset:0;z-index:5;pointer-events:none;
     display:flex;align-items:center;justify-content:center}
 .scan-frame{width:280px;height:90px;border:2.5px solid rgba(255,255,255,.85);
@@ -102,7 +107,6 @@ body,html{background:transparent;overflow:hidden;
 .scan-frame.hit{border-color:#22c55e;box-shadow:0 0 0 4000px rgba(0,0,0,.45),0 0 24px rgba(34,197,94,.6)}
 .scan-hint{position:absolute;bottom:16px;left:0;right:0;text-align:center;
     color:rgba(255,255,255,.7);font-size:12px;font-weight:600}
-
 .loading{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;
     align-items:center;justify-content:center;background:#0f172a;color:#94a3b8;
     font-size:14px;gap:12px;transition:opacity .4s}
@@ -110,11 +114,9 @@ body,html{background:transparent;overflow:hidden;
 .spinner{width:36px;height:36px;border:3px solid #334155;border-top-color:#3b82f6;
     border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-
 .flash{position:absolute;inset:0;z-index:15;background:rgba(34,197,94,.3);
     opacity:0;pointer-events:none;transition:opacity .12s}
 .flash.on{opacity:1}
-
 .done-banner{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
     align-items:center;justify-content:center;background:rgba(15,23,42,.88);color:#fff;
     opacity:0;pointer-events:none;transition:opacity .25s}
@@ -123,12 +125,6 @@ body,html{background:transparent;overflow:hidden;
     background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);
     padding:6px 18px;border-radius:8px;margin-top:6px}
 .done-sub{font-size:11px;color:#94a3b8;margin-top:8px}
-
-.paused-mask{position:absolute;inset:0;z-index:25;display:flex;align-items:center;
-    justify-content:center;background:rgba(15,23,42,.75);color:#94a3b8;
-    font-size:14px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .25s}
-.paused-mask.show{opacity:1}
-
 .cam-error{position:absolute;inset:0;z-index:10;display:none;flex-direction:column;
     align-items:center;justify-content:center;background:#0f172a;color:#f87171;
     font-size:14px;text-align:center;padding:20px}
@@ -143,9 +139,8 @@ body,html{background:transparent;overflow:hidden;
         <div style="font-size:44px">✅</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:2px">読み取り完了</div>
         <div class="done-code" id="doneCode"></div>
-        <div class="done-sub">自動で次のスキャンを開始します...</div>
+        <div class="done-sub">次のバーコードをかざしてください</div>
     </div>
-    <div class="paused-mask" id="pausedMask">スキャン一時停止中</div>
     <div class="cam-error" id="camError">
         <div style="font-size:32px;margin-bottom:8px">📷</div>
         <div style="font-weight:700">カメラにアクセスできません</div>
@@ -165,18 +160,14 @@ function beep(){try{const c=new(window.AudioContext||window.webkitAudioContext)(
 function vibrate(){try{navigator.vibrate&&navigator.vibrate([60,30,60])}catch(e){}}
 
 const $=id=>document.getElementById(id);
-let scanner=null, cameraReady=false, state="idle", lastCmdSeq=-1;
+let scanner=null, cameraReady=false, scanActive=false, lastCmdSeq=-1;
 let autoResumeTimer=null;
 
 function showBanner(code){$("doneCode").textContent=code;$("doneBanner").classList.add("show")}
 function hideBanner(){$("doneBanner").classList.remove("show")}
-function showPaused(){$("pausedMask").classList.add("show")}
-function hidePaused(){$("pausedMask").classList.remove("show")}
-
 function doFlash(){const e=$("flash");e.classList.add("on");setTimeout(()=>e.classList.remove("on"),250)}
 function doFrameHit(){const f=$("scanFrame");f.classList.add("hit");setTimeout(()=>f.classList.remove("hit"),800)}
 
-/* カメラ初回起動 (1回だけ) */
 function initCamera(){
     if(scanner) return Promise.resolve();
     scanner=new Html5Qrcode("reader");
@@ -189,29 +180,30 @@ function initCamera(){
             Html5QrcodeSupportedFormats.CODE_128,Html5QrcodeSupportedFormats.CODE_39,
             Html5QrcodeSupportedFormats.QR_CODE]},
         (text)=>{
-            if(state!=="scanning") return;
-            state="cooldown";
+            if(!scanActive) return;
+            scanActive=false;
             beep();vibrate();doFlash();doFrameHit();
             showBanner(text);
             try{scanner.pause(true)}catch(e){}
 
-            /* ユニークIDを付けて送信 (同じバーコード連続対応) */
+            /* ★ uid付きで送信し、50ms後にnullで上書き → rerunで古い値が返らない */
             const uid=Date.now()+"_"+Math.random().toString(36).slice(2,8);
             ST.send(JSON.stringify({code:text,uid:uid}));
+            setTimeout(()=>{ ST.send(null) }, 50);
 
-            /* 1.2秒後に自動で resume してすぐ次を読める状態にする */
+            /* 1.2秒後に自動resume */
             if(autoResumeTimer) clearTimeout(autoResumeTimer);
             autoResumeTimer=setTimeout(()=>{
                 hideBanner();
                 try{scanner.resume()}catch(e){}
-                state="scanning";
+                scanActive=true;
             },1200);
         },
         ()=>{}
     ).then(()=>{
         cameraReady=true;
         $("loading").classList.add("hidden");
-        state="scanning";
+        scanActive=true;
     }).catch(()=>{
         $("loading").classList.add("hidden");
         $("camError").classList.add("show");
@@ -219,31 +211,24 @@ function initCamera(){
 }
 
 function handleCommand(cmd,seq){
-    if(seq<=lastCmdSeq) return;   /* 重複コマンドを無視 */
+    if(seq<=lastCmdSeq) return;
     lastCmdSeq=seq;
-
     if(cmd==="start"){
-        hideBanner();hidePaused();
+        hideBanner();
         if(autoResumeTimer){clearTimeout(autoResumeTimer);autoResumeTimer=null}
         if(!cameraReady){
             $("loading").classList.remove("hidden");
             initCamera();
         }else{
             try{scanner.resume()}catch(e){}
-            state="scanning";
+            scanActive=true;
         }
-        ST.height(280);
-    }else if(cmd==="pause"){
-        if(autoResumeTimer){clearTimeout(autoResumeTimer);autoResumeTimer=null}
-        hideBanner();
-        if(cameraReady){try{scanner.pause(true)}catch(e){}}
-        state="paused";showPaused();
         ST.height(280);
     }else if(cmd==="hide"){
         if(autoResumeTimer){clearTimeout(autoResumeTimer);autoResumeTimer=null}
-        hideBanner();hidePaused();
-        if(cameraReady&&state==="scanning"){try{scanner.pause(true)}catch(e){}}
-        state="idle";
+        hideBanner();
+        if(cameraReady&&scanActive){try{scanner.pause(true)}catch(e){}}
+        scanActive=false;
         ST.height(0);
     }
 }
@@ -263,11 +248,9 @@ window.addEventListener("message",function(ev){
         f.write(html_code)
     return components.declare_component("persistent_scanner", path=d)
 
-# コンポーネント関数 (モジュールロード時に1回だけ生成)
 _scanner_func = build_scanner_component()
 
 def render_scanner(command="hide"):
-    """常に同じ key でマウント。seq で重複コマンドを防止"""
     if "scanner_cmd_seq" not in st.session_state:
         st.session_state.scanner_cmd_seq = 0
     st.session_state.scanner_cmd_seq += 1
@@ -277,7 +260,6 @@ def render_scanner(command="hide"):
         key="__persistent_scanner__",
         default=None,
     )
-    # JSON文字列をパースしてユニーク判定
     if raw is None:
         return None
     try:
@@ -285,13 +267,12 @@ def render_scanner(command="hide"):
         code = parsed.get("code", "")
         uid  = parsed.get("uid", "")
     except (json.JSONDecodeError, TypeError):
-        code = str(raw)
-        uid  = code
-    # 前回と同じ uid なら無視
-    if uid and uid == st.session_state.get("_last_scan_uid"):
+        return None  # null や不正な値は無視
+    if not uid:
         return None
-    if uid:
-        st.session_state["_last_scan_uid"] = uid
+    if uid == st.session_state.get("_last_scan_uid"):
+        return None
+    st.session_state["_last_scan_uid"] = uid
     return code if code else None
 
 
@@ -376,10 +357,10 @@ input,select,textarea,.stSelectbox div,
 .r-ok{background:#f0fdf4;color:#166534;border-left:5px solid #22c55e}
 .r-err{background:#fef2f2;color:#991b1b;border-left:5px solid #ef4444}
 div[data-testid="stVerticalBlock"]>div{padding-bottom:.15rem!important}
-.history-item{display:flex;align-items:center;gap:8px;padding:8px 12px;
-    border-radius:10px;margin:4px 0;font-size:.88rem;font-weight:500}
-.history-ok{background:#f0fdf4;color:#166534}
-.history-err{background:#fef2f2;color:#991b1b}
+.hist{display:flex;align-items:center;gap:8px;padding:8px 12px;
+    border-radius:10px;margin:4px 0;font-size:.85rem;font-weight:500}
+.hist-ok{background:#f0fdf4;color:#166534}
+.hist-err{background:#fef2f2;color:#991b1b}
 </style>""", unsafe_allow_html=True)
 
 def sr(kind, name, msg):
@@ -408,8 +389,8 @@ def upload_and_link_image(token, product_id, file_obj):
         blob.upload_from_file(buf, content_type="image/jpeg")
         signed_url = blob.generate_signed_url(version="v4", expiration=datetime.timedelta(minutes=15), method="GET")
         try:
-            sr = requests.get(f"https://tinyurl.com/api-create.php?url={requests.utils.quote(signed_url)}", timeout=5)
-            final_url = sr.text if sr.status_code == 200 else signed_url
+            r = requests.get(f"https://tinyurl.com/api-create.php?url={requests.utils.quote(signed_url)}", timeout=5)
+            final_url = r.text if r.status_code == 200 else signed_url
         except: final_url = signed_url
         headers = {"Authorization":f"Bearer {token}","Content-Type":"application/json"}
         payload = {"imageUrl": final_url}
@@ -479,16 +460,18 @@ def create_payload(form_data, code):
 
 
 # ============================================================
-# ページ 1: スキャン＆登録 (連続登録フロー)
+# ページ 1: スキャン＆登録 (連続登録)
 # ============================================================
 def _init_state():
-    defaults = {
-        "scan_phase": "idle",       # idle / scanning / manual_input / scanned
+    for k, v in {
+        "scan_phase": "idle",
         "final_code": "",
-        "code_source": None,        # scan / auto / manual
-        "register_history": [],     # [{name, code, ok, time}, ...]
-    }
-    for k, v in defaults.items():
+        "code_source": None,
+        "register_history": [],
+        # ★ 登録直後に追加したコードを「既知」として記録し、
+        #   次の get_products で返ってきても新規扱いにしない
+        "just_registered_codes": set(),
+    }.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -496,65 +479,64 @@ def _add_history(name, code, ok):
     h = st.session_state.register_history
     h.insert(0, {"name": name, "code": code, "ok": ok,
                  "time": datetime.datetime.now().strftime("%H:%M:%S")})
-    if len(h) > 30: st.session_state.register_history = h[:30]
+    if len(h) > 50:
+        st.session_state.register_history = h[:50]
 
 def page_scanner_form():
     inject_css()
     _init_state()
     token = get_token()
     if not token:
-        st.error("スマレジ認証エラー。"); st.stop()
+        st.error("スマレジ認証エラー。")
+        st.stop()
 
     prods = get_products(token)
     cat_opts = _cat_options(token)
     phase = st.session_state.scan_phase
 
-    # ======== カメラ (常時マウント) ========
-    if phase == "scanning":
-        cmd = "start"
-    elif phase == "scanned":
-        cmd = "pause"
-    else:
-        cmd = "hide"
+    # ======== カメラ (常時マウント・コマンド切替のみ) ========
+    scanner_cmd = "start" if phase == "scanning" else "hide"
+    scanned_value = render_scanner(command=scanner_cmd)
 
-    scanned_value = render_scanner(command=cmd)
+    # ★ scanning フェーズのときだけ、新しいスキャン値を受け付ける
     if scanned_value and phase == "scanning":
         st.session_state.final_code = scanned_value
         st.session_state.scan_phase = "scanned"
         st.rerun()
 
-    # ======== 登録履歴 (連続登録の成果) ========
+    # ======== 登録履歴 ========
     history = st.session_state.register_history
     if history:
         latest = history[0]
         icon = "✅" if latest["ok"] else "❌"
-        color_cls = "history-ok" if latest["ok"] else "history-err"
+        cls = "hist-ok" if latest["ok"] else "hist-err"
         st.markdown(
-            f'<div class="{color_cls} history-item">'
+            f'<div class="hist {cls}">'
             f'<span>{icon}</span><strong>{latest["name"]}</strong>'
             f'<span style="opacity:.5">({latest["code"]})</span>'
             f'<span style="margin-left:auto;font-size:.75rem;opacity:.5">{latest["time"]}</span>'
             f'</div>', unsafe_allow_html=True)
         if len(history) > 1:
-            with st.expander(f"登録履歴 ({len(history)}件)", expanded=False):
+            with st.expander(f"履歴 ({len(history)}件)"):
                 for h in history[1:]:
                     ic = "✅" if h["ok"] else "❌"
-                    cc = "history-ok" if h["ok"] else "history-err"
+                    cc = "hist-ok" if h["ok"] else "hist-err"
                     st.markdown(
-                        f'<div class="{cc} history-item">'
-                        f'<span>{ic}</span><strong>{h["name"]}</strong>'
+                        f'<div class="hist {cc}"><span>{ic}</span><strong>{h["name"]}</strong>'
                         f'<span style="opacity:.5">({h["code"]})</span>'
-                        f'<span style="margin-left:auto;font-size:.75rem;opacity:.5">{h["time"]}</span>'
-                        f'</div>', unsafe_allow_html=True)
+                        f'<span style="margin-left:auto;font-size:.75rem;opacity:.5">{h["time"]}</span></div>',
+                        unsafe_allow_html=True)
 
     # ======== idle ========
     if phase == "idle":
-        st.markdown('<div class="ui-card"><div class="ui-card-title">商品コードを入力</div>', unsafe_allow_html=True)
+        st.markdown('<div class="ui-card"><div class="ui-card-title">商品コードを入力</div>',
+                    unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("📸 スキャン", type="primary", use_container_width=True):
                 st.session_state.scan_phase = "scanning"
                 st.session_state.code_source = "scan"
+                st.session_state.final_code = ""
                 st.rerun()
         with c2:
             if st.button("⌨️ 手入力", type="secondary", use_container_width=True):
@@ -573,12 +555,15 @@ def page_scanner_form():
     elif phase == "scanning":
         if st.button("← 戻る", type="secondary"):
             st.session_state.scan_phase = "idle"
+            st.session_state.final_code = ""
             st.rerun()
 
     # ======== manual_input ========
     elif phase == "manual_input":
-        st.markdown('<div class="ui-card"><div class="ui-card-title">商品コードを入力</div>', unsafe_allow_html=True)
-        mc = st.text_input("商品コード", placeholder="例: 4901234567890", label_visibility="collapsed")
+        st.markdown('<div class="ui-card"><div class="ui-card-title">商品コードを入力</div>',
+                    unsafe_allow_html=True)
+        mc = st.text_input("商品コード", placeholder="例: 4901234567890",
+                           label_visibility="collapsed")
         ca, cb = st.columns(2)
         with ca:
             if st.button("決定", type="primary", disabled=not mc):
@@ -594,9 +579,17 @@ def page_scanner_form():
     # ======== scanned → フォーム ========
     elif phase == "scanned":
         code_input = st.session_state.final_code
+
+        # ★ 今回のセッションで登録済みのコードは「既存」判定から除外
+        just_registered = st.session_state.just_registered_codes
         target_prod = find_product_by_code(prods, code_input)
+        if target_prod and code_input in just_registered:
+            # 直前に自分が登録したばかり → 既存扱いにするか確認
+            # (同じコードを意図的に再編集したい場合もあるのでそのまま既存扱い)
+            pass
         is_new = target_prod is None
 
+        # コード表示
         st.markdown(
             f'<div class="ui-card" style="padding:.85rem 1.25rem">'
             f'<div style="display:flex;align-items:center;justify-content:space-between">'
@@ -605,25 +598,36 @@ def page_scanner_form():
             f'</div></div>', unsafe_allow_html=True)
 
         if is_new:
-            st.markdown('<span class="status-badge status-new">✨ 新規登録</span>', unsafe_allow_html=True)
+            st.markdown('<span class="status-badge status-new">✨ 新規登録</span>',
+                        unsafe_allow_html=True)
             dd = {k: d["default"] for k, d in FIELD_DEFS.items()}
         else:
-            st.markdown(f'<span class="status-badge status-exist">🔄 更新: {target_prod.get("productName","")}</span>', unsafe_allow_html=True)
+            st.markdown(
+                f'<span class="status-badge status-exist">'
+                f'🔄 更新: {target_prod.get("productName","")}</span>',
+                unsafe_allow_html=True)
             dd = {}
             for k, d in FIELD_DEFS.items():
                 val = target_prod.get(d["api"], d["default"])
-                if d["type"] == "number": val = safe_float(val, d["default"])
-                elif d["type"] == "select": val = api2sel(safe_str(val), d["options"])
+                if d["type"] == "number":
+                    val = safe_float(val, d["default"])
+                elif d["type"] == "select":
+                    val = api2sel(safe_str(val), d["options"])
                 elif d["type"] == "category":
                     cid = safe_str(val)
-                    val = next((o for o in cat_opts if o.startswith(cid+":")), "") if cid else ""
+                    val = next((o for o in cat_opts if o.startswith(cid + ":")), "") if cid else ""
                 dd[k] = val
 
-        st.markdown('<div class="ui-card"><div class="ui-card-title">商品情報</div>', unsafe_allow_html=True)
+        # フォーム
+        st.markdown('<div class="ui-card"><div class="ui-card-title">商品情報</div>',
+                    unsafe_allow_html=True)
         fv = {}
-        fv["商品名"] = st.text_input("商品名 *", value=dd.get("商品名",""), placeholder="例: オーガニックコーヒー豆 200g")
-        fv["商品価格"] = st.number_input("価格 *", value=int(dd.get("商品価格",0)), step=10, min_value=0)
-        ci = cat_opts.index(dd.get("部門ID","")) if dd.get("部門ID","") in cat_opts else 0
+        fv["商品名"] = st.text_input("商品名 *", value=dd.get("商品名", ""),
+                                      placeholder="例: オーガニックコーヒー豆 200g")
+        fv["商品価格"] = st.number_input("価格 *", value=int(dd.get("商品価格", 0)),
+                                         step=10, min_value=0)
+        cat_def = dd.get("部門ID", "")
+        ci = cat_opts.index(cat_def) if cat_def in cat_opts else 0
         fv["部門ID"] = st.selectbox("部門 *", cat_opts, index=ci)
 
         with st.expander("詳細設定", expanded=False):
@@ -639,16 +643,24 @@ def page_scanner_form():
                     fv[k] = st.text_input(k, value=dv)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="ui-card"><div class="ui-card-title">写真（任意）</div>', unsafe_allow_html=True)
-        pt, ut = st.tabs(["📷 撮影","📁 ファイル選択"])
-        with pt: camera_img = st.camera_input("撮影", label_visibility="collapsed")
-        with ut: upload_img = st.file_uploader("選択", type=["jpg","jpeg","png"], label_visibility="collapsed")
+        # 写真
+        st.markdown('<div class="ui-card"><div class="ui-card-title">写真（任意）</div>',
+                    unsafe_allow_html=True)
+        pt, ut = st.tabs(["📷 撮影", "📁 ファイル選択"])
+        with pt:
+            camera_img = st.camera_input("撮影", label_visibility="collapsed")
+        with ut:
+            upload_img = st.file_uploader("選択", type=["jpg","jpeg","png"],
+                                          label_visibility="collapsed")
         img_file = camera_img or upload_img
         st.markdown('</div>', unsafe_allow_html=True)
 
-        cs, cc = st.columns([3,1])
+        # ボタン
+        cs, cc = st.columns([3, 1])
         with cs:
-            submit = st.button("🚀 登録して次へ" if is_new else "🔄 更新して次へ", type="primary", use_container_width=True)
+            submit = st.button(
+                "🚀 登録して次へ" if is_new else "🔄 更新して次へ",
+                type="primary", use_container_width=True)
         with cc:
             if st.button("取消", type="secondary", use_container_width=True):
                 st.session_state.scan_phase = "idle"
@@ -656,37 +668,53 @@ def page_scanner_form():
                 st.rerun()
 
         if submit:
-            if not fv["商品名"]: st.error("商品名は必須です。"); st.stop()
-            if not fv["部門ID"]: st.error("部門を選択してください。"); st.stop()
+            if not fv["商品名"]:
+                st.error("商品名は必須です。")
+                st.stop()
+            if not fv["部門ID"]:
+                st.error("部門を選択してください。")
+                st.stop()
+
             payload = create_payload(fv, code_input)
-            headers = {"Authorization":f"Bearer {token}","Content-Type":"application/json"}
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
             ok, detail = False, ""
+
             with st.spinner("送信中..."):
                 if is_new:
-                    r = requests.post(f"{get_api_base()}/products", headers=headers, json=payload)
-                    if r.status_code in (200,201):
+                    r = requests.post(f"{get_api_base()}/products",
+                                      headers=headers, json=payload)
+                    if r.status_code in (200, 201):
                         pid = r.json().get("productId")
-                        if img_file: upload_and_link_image(token, pid, img_file)
+                        if img_file:
+                            upload_and_link_image(token, pid, img_file)
                         ok = True
-                    else: detail = r.text[:80]
+                    else:
+                        detail = r.text[:80]
                 else:
                     pid = target_prod.get("productId")
-                    r = requests.patch(f"{get_api_base()}/products/{pid}", headers=headers, json=payload)
-                    if r.status_code in (200,204):
-                        if img_file: upload_and_link_image(token, pid, img_file)
+                    r = requests.patch(f"{get_api_base()}/products/{pid}",
+                                       headers=headers, json=payload)
+                    if r.status_code in (200, 204):
+                        if img_file:
+                            upload_and_link_image(token, pid, img_file)
                         ok = True
-                    else: detail = r.text[:80]
+                    else:
+                        detail = r.text[:80]
 
+            # ★ 登録済みコードを記録 + キャッシュクリア
+            st.session_state.just_registered_codes.add(code_input)
             st.cache_data.clear()
             _add_history(fv["商品名"], code_input, ok)
 
-            # --- 次のフローへ自動遷移 ---
+            # ★ uid をリセットして、次の rerun で古いスキャンを拾わないようにする
+            st.session_state.pop("_last_scan_uid", None)
+
+            # 次のフローへ
             src = st.session_state.code_source
             if src == "auto":
                 st.session_state.final_code = generate_auto_code()
                 st.session_state.scan_phase = "scanned"
             elif src == "scan":
-                # カメラは維持したまま scanning に戻す → 即次のバーコードを読める
                 st.session_state.scan_phase = "scanning"
                 st.session_state.final_code = ""
             else:
@@ -703,13 +731,12 @@ def page_spreadsheet():
     token = get_token()
     if not token: st.error("認証エラー"); st.stop()
     st.markdown("### 商品一括管理")
-
     with st.expander("表示列の設定"):
         optional = [k for k,d in FIELD_DEFS.items() if not d["core"]]
         cur = st.session_state.get("visible_fields",[])
-        sel = st.multiselect("追加する項目", options=optional, default=[c for c in cur if c in optional], label_visibility="collapsed")
+        sel = st.multiselect("追加する項目", options=optional,
+                             default=[c for c in cur if c in optional], label_visibility="collapsed")
         if sel != cur: st.session_state["visible_fields"]=sel; st.rerun()
-
     visible = get_visible(); prods = get_products(token)
     cat_map = {safe_str(c.get("categoryId","")): safe_str(c.get("categoryName","")) for c in get_categories(token)}
     rows = []
@@ -719,7 +746,7 @@ def page_spreadsheet():
             d=FIELD_DEFS[k]; v=p.get(d["api"],d["default"])
             if d["type"]=="select": v=api2sel(safe_str(v),d.get("options",[]))
             elif d["type"]=="category":
-                cid=safe_str(v);cn=cat_map.get(cid,"")
+                cid=safe_str(v); cn=cat_map.get(cid,"")
                 v=f"{cid}:{cn}" if cid and cn else cid
             elif d["type"]=="number": v=safe_float(v,d["default"])
             else: v=safe_str(v,d["default"])
@@ -727,18 +754,17 @@ def page_spreadsheet():
         rows.append(row)
     df=pd.DataFrame(rows); dc=["productId","商品コード"]+visible
     if df.empty: df=pd.DataFrame(columns=dc)
-
     btn=st.button("💾 変更をすべて保存",type="primary")
     co=_cat_options(token)
-    cc={"productId":st.column_config.TextColumn("商品ID",disabled=True),"商品コード":st.column_config.TextColumn("商品コード",disabled=True)}
+    ccfg={"productId":st.column_config.TextColumn("商品ID",disabled=True),
+          "商品コード":st.column_config.TextColumn("商品コード",disabled=True)}
     for k in visible:
         d=FIELD_DEFS[k]
-        if d["type"]=="category": cc[k]=st.column_config.SelectboxColumn(k,options=co)
-        elif d["type"]=="select": cc[k]=st.column_config.SelectboxColumn(k,options=d.get("options",[]))
-        elif d["type"]=="number": cc[k]=st.column_config.NumberColumn(k)
-        else: cc[k]=st.column_config.TextColumn(k,max_chars=d.get("max"))
-    edf=st.data_editor(df[dc],column_config=cc,num_rows="fixed",use_container_width=True,height=600)
-
+        if d["type"]=="category": ccfg[k]=st.column_config.SelectboxColumn(k,options=co)
+        elif d["type"]=="select": ccfg[k]=st.column_config.SelectboxColumn(k,options=d.get("options",[]))
+        elif d["type"]=="number": ccfg[k]=st.column_config.NumberColumn(k)
+        else: ccfg[k]=st.column_config.TextColumn(k,max_chars=d.get("max"))
+    edf=st.data_editor(df[dc],column_config=ccfg,num_rows="fixed",use_container_width=True,height=600)
     if btn:
         results=[]
         with st.spinner("同期中..."):
@@ -777,7 +803,9 @@ def page_categories():
     cdf=pd.DataFrame([{"部門ID":safe_str(c.get("categoryId","")),"部門名":safe_str(c.get("categoryName","")),"表示順":safe_int(c.get("displaySequence"),0)} for c in cats]) if cats else pd.DataFrame(columns=["部門ID","部門名","表示順"])
     btn=st.button("💾 部門データを保存",type="primary")
     ec=st.data_editor(cdf,use_container_width=True,num_rows="dynamic",height=500,
-        column_config={"部門ID":st.column_config.TextColumn("部門ID (自動)",disabled=True),"部門名":st.column_config.TextColumn("部門名",required=True),"表示順":st.column_config.NumberColumn("表示順",default=0)})
+        column_config={"部門ID":st.column_config.TextColumn("部門ID (自動)",disabled=True),
+                       "部門名":st.column_config.TextColumn("部門名",required=True),
+                       "表示順":st.column_config.NumberColumn("表示順",default=0)})
     if btn:
         results=[]
         with st.spinner("同期中..."):
@@ -816,7 +844,7 @@ def page_settings():
     sfx=st.text_input("接尾辞",value=st.session_state.auto_rule_suffix)
     st.code(f"{pfx}20260410134221{sfx}",language=None)
     if st.button("保存",type="primary"):
-        st.session_state.auto_rule_prefix=pfx;st.session_state.auto_rule_suffix=sfx
+        st.session_state.auto_rule_prefix=pfx; st.session_state.auto_rule_suffix=sfx
         st.success("保存しました。")
     st.markdown('</div>',unsafe_allow_html=True)
 
