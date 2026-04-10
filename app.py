@@ -73,23 +73,22 @@ def get_token():
     return None
 
 # ============================================================
-# 🌟 特製バーコードリーダー (超スリム＆スクロール許可)
+# 🌟 特製バーコードリーダー (ポップアップ用・コンパクト版)
 # ============================================================
 def custom_barcode_scanner(key="scanner"):
     component_dir = os.path.abspath("barcode_component_dir")
     if not os.path.exists(component_dir):
         os.makedirs(component_dir)
     
-    # touch-action: pan-y で縦スクロールを許可し、高さを極限まで削る
     html_code = """
     <!DOCTYPE html>
     <html>
     <head>
         <script src="https://unpkg.com/html5-qrcode"></script>
         <style>
-            body, html { margin: 0; padding: 0; background-color: transparent; font-family: sans-serif; overflow: hidden; touch-action: pan-y; }
-            #reader { width: 100%; border-radius: 8px; border: 2px solid #94a3b8; background: #000; touch-action: pan-y; }
-            #reader video { object-fit: cover; touch-action: pan-y; }
+            body, html { margin: 0; padding: 0; background-color: transparent; font-family: sans-serif; overflow: hidden; }
+            #reader { width: 100%; border-radius: 8px; border: 2px solid #3b82f6; background: #000; }
+            #reader video { object-fit: cover; }
         </style>
     </head>
     <body>
@@ -103,7 +102,7 @@ def custom_barcode_scanner(key="scanner"):
             }
             window.onload = function() {
                 window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
-                setHeight(220); // 🌟 初期高さを大幅に削りました
+                setHeight(250); // ポップアップ内に収まる高さ
             };
 
             let started = false;
@@ -114,8 +113,8 @@ def custom_barcode_scanner(key="scanner"):
                     
                     const config = { 
                         fps: 15, 
-                        qrbox: { width: 250, height: 70 }, 
-                        aspectRatio: 2.0, // 🌟 横長(16:9以上)にして縦スペースを節約
+                        qrbox: { width: 250, height: 80 }, // 商品バーコードに合わせた横長枠
+                        aspectRatio: 1.33, 
                         formatsToSupport: [ 
                             Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
                             Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
@@ -125,16 +124,15 @@ def custom_barcode_scanner(key="scanner"):
                     
                     html5QrCode.start({ facingMode: "environment" }, config, 
                         (decodedText) => {
-                            sendToStreamlit(decodedText);
                             html5QrCode.stop().then(() => {
-                                document.getElementById("reader").innerHTML = "<div style='color:#10b981; text-align:center; padding:10px; margin:0; background:#f0fdf4; font-weight:bold; border-radius:8px;'>✅ 読取完了!</div>";
-                                setHeight(50); // 読取後はさらにペチャンコにする
+                                document.getElementById("reader").innerHTML = "<div style='color:#10b981; text-align:center; padding:20px; font-weight:bold; background:#f0fdf4;'>✅ 読取成功!</div>";
+                                setHeight(80);
+                                sendToStreamlit(decodedText); // Streamlitに値を返す
                             });
                         },
                         (errorMessage) => {}
                     ).catch(err => {
-                        document.getElementById("reader").innerHTML = "<p style='color:red; text-align:center; padding:10px; margin:0;'>カメラ権限が必要です</p>";
-                        setHeight(60);
+                        document.getElementById("reader").innerHTML = "<p style='color:red; text-align:center; padding:10px;'>カメラ権限を許可してください</p>";
                     });
                 }
             });
@@ -205,7 +203,6 @@ def inject_css():
     * { font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; }
     input, select, textarea, .stSelectbox div { font-size: 16px !important; }
     .stApp { background: #f8fafc; }
-    /* 余白を極限まで減らす */
     .block-container { padding: 0.5rem 0.5rem 3rem 0.5rem !important; max-width: 600px !important; margin: 0 auto;}
     
     .step-card { background: #ffffff; padding: 1rem; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); margin-bottom: 0.8rem; border: 1px solid #e2e8f0; }
@@ -334,7 +331,23 @@ def create_payload(form_data, code):
     return payload
 
 # ============================================================
-# ページ 1: 📱 スキャン＆登録 (連続スキャン特化)
+# 🌟 ポップアップ用のダイアログ関数
+# ============================================================
+@st.dialog("📸 バーコードをスキャン")
+def scanner_modal():
+    st.write("商品のバーコードを赤い枠に合わせてください。")
+    # キーを固定化してブラウザに「同じカメラ」だと認識させる
+    scanned_result = custom_barcode_scanner(key="popup_scanner_fixed")
+    
+    if scanned_result:
+        # 読取成功時にセッションステートを更新してポップアップを閉じる
+        st.session_state.input_mode = "scanned_success"
+        st.session_state.final_code = scanned_result
+        st.session_state.show_scanner_modal = False
+        st.rerun()
+
+# ============================================================
+# ページ 1: 📱 スキャン＆登録 (ポップアップ＆連続スキャン)
 # ============================================================
 def page_scanner_form():
     inject_css()
@@ -347,11 +360,17 @@ def page_scanner_form():
 
     # ステート管理
     if "input_mode" not in st.session_state:
-        st.session_state.input_mode = "scan" # 最初からスキャンモードにする
+        st.session_state.input_mode = None
     if "final_code" not in st.session_state:
         st.session_state.final_code = ""
     if "was_auto" not in st.session_state:
         st.session_state.was_auto = False
+    if "show_scanner_modal" not in st.session_state:
+        st.session_state.show_scanner_modal = False
+
+    # ポップアップを開くフラグが立っていたらモーダルを実行
+    if st.session_state.show_scanner_modal:
+        scanner_modal()
 
     prods = get_products(token)
     cat_opts = _cat_options(token)
@@ -369,9 +388,8 @@ def page_scanner_form():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📸 スキャン", type="primary" if st.session_state.input_mode == "scan" else "secondary"):
-            st.session_state.input_mode = "scan"
-            st.session_state.final_code = ""
+        if st.button("📸 スキャン起動", type="primary" if st.session_state.input_mode in ["scan", "scanned_success"] else "secondary"):
+            st.session_state.show_scanner_modal = True
             st.session_state.was_auto = False
             st.rerun()
     with col2:
@@ -383,23 +401,16 @@ def page_scanner_form():
 
     code_input = ""
 
-    if st.session_state.input_mode == "scan":
-        st.caption("バーコードを赤い枠線に合わせてください。")
-        # 🌟 超スリム＆スクロール可能なコンポーネント
-        scanned_result = custom_barcode_scanner(key=f"live_scanner_{time.time()}")
-        
-        if scanned_result:
-            st.session_state.input_mode = "scanned_success"
-            st.session_state.final_code = scanned_result
-            st.rerun()
-
-    elif st.session_state.input_mode == "auto":
+    if st.session_state.input_mode == "auto":
         code_input = st.session_state.final_code
         st.success(f"✅ 自動採番: **{code_input}**")
         
     elif st.session_state.input_mode == "scanned_success":
         code_input = st.session_state.final_code
         st.success(f"✅ 読取成功: **{code_input}**")
+        
+        # 手入力で修正したい場合用の枠
+        code_input = st.text_input("コードを手動で修正する場合はこちら", value=code_input)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -467,9 +478,9 @@ def page_scanner_form():
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.write("##")
-        submit_btn = st.button("🚀 登録して次の商品をスキャン", type="primary")
+        submit_btn = st.button("🚀 登録して『次の商品』へ", type="primary")
 
-        # 送信処理 (無限ループの要！)
+        # 🌟 無限ループ登録の仕掛け
         if submit_btn:
             if not form_vals["商品名"] or not form_vals["部門ID"]:
                 st.error("商品名と部門は必須です。")
@@ -483,33 +494,30 @@ def page_scanner_form():
                     if r.status_code in (200, 201):
                         pid = r.json().get("productId")
                         if img_file:
-                            ok, msg = upload_and_link_image(token, pid, img_file)
-                            st.success(f"✅ {form_vals['商品名']} (画像セット完了)")
-                        else:
-                            st.success(f"✅ {form_vals['商品名']} を登録しました！")
+                            upload_and_link_image(token, pid, img_file)
+                        st.success(f"✅ {form_vals['商品名']} を登録しました！")
                     else: st.error(f"登録失敗: {r.text[:50]}")
                 else:
                     pid = target_prod.get("productId")
                     r = requests.patch(f"{get_api_base()}/products/{pid}", headers={"Authorization":f"Bearer {token}","Content-Type":"application/json"}, json=payload)
                     if r.status_code in (200, 204):
                         if img_file:
-                            ok, msg = upload_and_link_image(token, pid, img_file)
-                            st.success(f"✅ {form_vals['商品名']} (画像更新完了)")
-                        else:
-                            st.success(f"✅ {form_vals['商品名']} を更新しました！")
+                            upload_and_link_image(token, pid, img_file)
+                        st.success(f"✅ {form_vals['商品名']} を更新しました！")
                     else: st.error(f"更新失敗: {r.text[:50]}")
 
                 st.cache_data.clear()
+                time.sleep(1.5) # 成功メッセージを少し見せる
                 
-                time.sleep(1) # 一瞬だけ成功メッセージを見せる
-                
-                # 🌟 ここが「無限スキャン」の仕掛け！
+                # 🚀 登録完了後、自動で次のスキャン（または自動採番）を開始！
                 if st.session_state.was_auto:
                     st.session_state.input_mode = "auto"
                     st.session_state.final_code = f"AUTO-{int(time.time() * 1000)}"
                 else:
                     st.session_state.input_mode = "scan"
                     st.session_state.final_code = ""
+                    # 次のカメラポップアップを自動で開く
+                    st.session_state.show_scanner_modal = True
                 
                 st.rerun()
 
